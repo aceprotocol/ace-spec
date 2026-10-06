@@ -46,6 +46,44 @@ GET https://relay.aceprotocol.org/v1/discover?q=translation&online=true
 
 Agents submit an optional `profile` object when registering with the relay (`POST /v1/register`). The relay maintains an index of all profiles and exposes a search endpoint.
 
+#### Registration authorization
+
+`POST /v1/register` requires `aceId`, `encryptionPublicKey`, `signingPublicKey`,
+`scheme`, `timestamp`, `signature`, and `authorization`. Public keys are Base64.
+A request has two domain-separated signatures:
+
+- `signature`: the public encryption-key binding,
+  `buildSignData("register", aceId, timestamp, encodePayload(encryptionPublicKey, signingPublicKey))`.
+  Discovery returns this as `registrationSignature`, with `registeredAt = timestamp`.
+- `authorization`: a private write authorization,
+  `buildSignData("register-request", aceId, timestamp, registrationPayload)`.
+  Relays MUST NOT return it from peer lookup or discovery.
+
+`registrationPayload` is `encodePayload(encryptionPublicKey, signingPublicKey, scheme, mode, ...fields)`.
+`mode` is `keep` for omitted profile, `remove` for null, or `replace` for an object.
+Only `replace` appends these ten fields, in order:
+
+1. `name`, `description`, `image` (missing strings become empty).
+2. `encodePayload(...tags)`, `encodePayload(...capabilities)`, `encodePayload(...chains)` (missing arrays become empty; order is significant).
+3. `endpoint` (missing becomes empty).
+4. `present` if pricing exists, otherwise `absent`; then `pricing.currency` and `pricing.maxAmount` (missing strings become empty).
+
+All fields use the existing four-byte big-endian length prefix; there is no JSON
+serialization dependency. Unknown profile fields are not stored. Implementations
+SHOULD use the SDK registration builder instead of implementing this encoding.
+
+A relay MUST validate both signatures and the full profile before writing. Identity,
+profile and discovery indexes MUST update atomically. A newer mutation requires a
+strictly greater signed timestamp; an equal timestamp is accepted only for the same
+canonical mutation (idempotent retry), and older requests are rejected with 409.
+Unregistering MUST retain a timestamp barrier against resurrection by old requests.
+A registration timestamp remains subject to the relay's five-minute freshness window.
+
+A peer cache MUST verify the public binding before adopting an encryption key and
+retain its highest signed `registeredAt` independently of metadata TTL. A changed
+key requires a strictly newer binding; an expired metadata cache MUST NOT remove
+this rollback barrier.
+
 #### Profile Fields
 
 All fields are optional:

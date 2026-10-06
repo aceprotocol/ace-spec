@@ -23,13 +23,13 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
    → Reject if timestamp <= H or timestamp <= H[from] (the seen store's horizons)
 
 3. Replay Check
-   → Reject if messageId is in the seen store
+   → Reject if (from, messageId) is in the seen store
 
 4. Signature Verification (BEFORE decryption)
    → Verify signature.scheme is supported
    → Verify signature against sender's public key
    → Reconstruct signData and compare
-   → Then atomically: if messageId is in the seen store → reject; else insert
+   → Then atomically: if (from, messageId) is in the seen store → reject; else insert
      (messageId, from, timestamp). Nothing enters the store before its signature
      verifies, and an entry is never removed on a later failure (decryption,
      body schema, state machine): an authentic message is processed at most
@@ -61,7 +61,7 @@ This prevents state corruption if encryption or signing fails.
 
 ## Replay Protection
 
-Invariant: a messageId MUST be rejected for as long as its message could still
+Invariant: a (from, messageId) pair MUST be rejected for as long as its message could still
 pass step 2.
 
 ### Seen Message Store
@@ -72,15 +72,21 @@ The seen store holds entries `(messageId, from, timestamp)`, where `from` and
 `timestamp <= H` or `timestamp <= H[from]`, so removing an entry is safe once a
 horizon covers it:
 
-- **Removal:** only the entry with the smallest `timestamp` may be removed.
+- **Removal:** entries already covered by a horizon may be discarded. Otherwise,
+  only the entry with the smallest `timestamp` may be removed.
   When its `timestamp` is below the floor, raise `H` to it. When the store is
   over capacity, raise only `H[from]` of that entry's sender to it: a sender
   flooding the store then delays only its own messages, never anyone else's.
 - **Sender horizons:** at most `capacity` are kept. Drop any `H[from] <= H`;
   if still over, fold the lowest into `H` (raise `H` to them and drop them).
-- **New store:** `H = now - 5 minutes`, no sender horizons.
+- **New store:** online defaults to `H = now - 5 minutes`, no sender horizons.
+  A first-time offline receiver MAY initialize `H` just below its explicit retention
+  floor. Missing or corrupt state beside existing message history MUST NOT be
+  treated as first use.
 - **Capacity:** Minimum 100,000 entries
-- **Persistence:** Entries, `H` and the sender horizons are persisted together. Economic messages
+- **Persistence:** Entries, `H` and the sender horizons are persisted together.
+  Exported entries MUST be above both horizons, including after same-second eviction.
+  Restoring a valid export MUST preserve replay decisions. Economic messages
   MUST be persisted before they are acted on; system/social messages MAY be
   batch-persisted.
 - **Storage:** File-based (e.g., `~/.ace/seen_messages.json`) or database,
@@ -95,6 +101,19 @@ at step 2. Use that floor for every message, live ones included, until the
 backlog is done: a live message processed with the default floor removes the
 backlog entries below it and raises `H` past any backlog message not yet
 processed.
+
+### Durable delivery
+
+Persist a pending signed envelope together with its resulting thread state before
+sending it. Uncertain network outcomes retry the same envelope and message ID;
+a retry MUST NOT advance the thread twice. Clear pending delivery only after acknowledgement.
+
+A receiver MUST persist the message effect before acknowledging delivery. Use a
+tentative replay state and commit it only with durable consumption; on storage or
+hardware failure, restore the whole previous replay state, including horizons.
+Permanently invalid envelopes SHOULD be quarantined by a full-envelope fingerprint
+so a forged sender/message ID cannot poison an authentic delivery. A cursor may
+advance past durable rejections, but MUST stop before transient failures.
 
 ### Timestamp Freshness
 

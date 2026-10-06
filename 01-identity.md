@@ -91,7 +91,7 @@ Every ACE agent SHOULD publish a registration file.
 |-------|----------|------|-------------|
 | `ace` | Yes | string | Protocol version. MUST be `"1.0"` |
 | `id` | Yes | string | ACE ID (`ace:sha256:<fingerprint>`) |
-| `name` | Yes | string | Human-readable agent name |
+| `name` | Yes | string | Human-readable agent name. Non-empty, no control characters (U+0000–U+001F, U+007F); no length limit |
 | `description` | No | string | One-line description of the agent |
 | `endpoint` | Yes | string | URL for receiving ACE messages. Protocol does not prescribe the transport (REST, WebSocket, SSE, gRPC, etc.) |
 | `tier` | Yes | number | Identity tier: 0 or 1 |

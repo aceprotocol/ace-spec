@@ -32,12 +32,12 @@ Layer 5: Reputation               → Transaction-anchored feedback, scoring, po
 
 | Feature | ACE | Google A2A | Anthropic MCP |
 |---------|-----|-----------|---------------|
-| E2E Encryption | X25519 + AES-256-GCM | No | No |
+| E2E Encryption | X-Wing (X25519 + ML-KEM-768) + AES-256-GCM | No | No |
 | Identity Tiers | Key / Chain | Agent Card | Server manifest |
 | Payment Native | Yes (crypto + fiat) | No | No |
 | Hardware Security | Optional (SE/TPM/HSM) | No | N/A |
 | Cross-Chain | Yes (signingScheme registry) | N/A | N/A |
-| Forward Secrecy | Yes (ephemeral keys) | No | No |
+| Post-Quantum Encryption | Yes (hybrid KEM) | No | No |
 
 ## Version Compatibility
 
@@ -56,7 +56,7 @@ These rules ensure the protocol can evolve without coordination — new message 
 |----------|-------------|
 | [01-identity.md](./01-identity.md) | Identity tiers, registration file format |
 | [02-discovery.md](./02-discovery.md) | Discovery mechanisms: direct, well-known, registry, ERC-8004 |
-| [03-encryption.md](./03-encryption.md) | X25519 ECDH + HKDF + AES-256-GCM encryption scheme |
+| [03-encryption.md](./03-encryption.md) | X-Wing hybrid post-quantum KEM + HKDF-SHA256 + AES-256-GCM encryption scheme |
 | [04-messages.md](./04-messages.md) | Message envelope, types, and economic schemas |
 | [05-settlement.md](./05-settlement.md) | Settlement methods: crypto/*, fiat/* |
 | [06-security.md](./06-security.md) | Security model: replay protection, signature verification, fail-stop |
@@ -68,6 +68,7 @@ These rules ensure the protocol can evolve without coordination — new message 
 |--------|-----------|--------|------|
 | [ed25519](./signing-schemes/ed25519.md) | Ed25519 | Solana, general-purpose | Built-in |
 | [secp256k1](./signing-schemes/secp256k1.md) | secp256k1 ECDSA | EVM (Ethereum, Base, etc.) | Built-in |
+| [ml-dsa-65](./signing-schemes/ml-dsa-65.md) | ML-DSA-65 (FIPS 204) | — | Reserved |
 
 New schemes are added via PR to this repository.
 

@@ -5,7 +5,7 @@
 Every ACE agent has an identity composed of:
 
 1. **A signing key pair** — Used to authenticate messages (algorithm defined by `signingScheme`)
-2. **An X25519 encryption key pair** — Used for E2E encrypted communication
+2. **An X-Wing encryption key pair** (X25519 + ML-KEM-768 hybrid) — Used for E2E encrypted communication
 3. **An ACE ID** — Derived deterministically from the signing public key
 
 ### ACE ID Format
@@ -26,7 +26,7 @@ ACE defines two progressive trust tiers. Higher tiers include the properties of 
 
 ### Tier 0: Key-Only
 
-- **Requirement:** A signing key pair + X25519 encryption key pair
+- **Requirement:** A signing key pair + X-Wing encryption key pair
 - **Trust model:** Self-asserted. No external verification.
 - **Suitable for:** Any software agent. Zero barrier to entry.
 - **Discovery:** Direct endpoint exchange, Well-Known URL, or ACE Registry
@@ -57,7 +57,7 @@ Every ACE agent SHOULD publish a registration file.
     "scheme": "ed25519",
     "address": "5Ht7RkVSupHeNbGWiHfwJ3RYn4RZfpAv5tk2UrQKbkWR",
     "signingPublicKey": "Base64(Ed25519PublicKey)",
-    "encryptionPublicKey": "Base64(X25519PublicKey)"
+    "encryptionPublicKey": "Base64(XWingPublicKey[1216])"
   },
 
   "capabilities": [
@@ -100,7 +100,7 @@ Every ACE agent SHOULD publish a registration file.
 | `signing.scheme` | Yes | string | Signing scheme from the registry (e.g., `"ed25519"`, `"secp256k1"`) |
 | `signing.address` | Yes | string | Address derived from signing key (format depends on scheme) |
 | `signing.signingPublicKey` | No | string | Base64-encoded raw signing public key. REQUIRED for `secp256k1` (address is a hash, cannot recover public key). Optional for `ed25519` (address IS the public key in Base58). |
-| `signing.encryptionPublicKey` | Yes | string | Base64-encoded X25519 public key for E2E encryption |
+| `signing.encryptionPublicKey` | Yes | string | Base64-encoded X-Wing public key (exactly 1216 bytes) for E2E encryption. Validators MUST reject any other length. |
 | `capabilities` | No | array | List of capabilities the agent offers |
 | `settlement` | No | array | Supported settlement methods (e.g., `["crypto/instant", "fiat/*"]`) |
 | `chains` | No | array | Blockchain addresses for receiving payments |

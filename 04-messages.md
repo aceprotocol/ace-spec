@@ -17,7 +17,7 @@ Every ACE message uses this envelope format:
   "body": {},
 
   "encryption": {
-    "ephemeralPubKey": "Base64(X25519PublicKey)",
+    "kemCiphertext": "Base64(X-Wing ciphertext[1120])",
     "payload": "Base64(nonce || ciphertext || tag)"
   },
   "signature": {
@@ -74,13 +74,15 @@ signData = SHA-256(
 
 | Action | Context | Payload |
 |--------|---------|---------|
-| `message` | Agent-to-agent messages | `encodePayload(type, to, conversationId, messageId, threadIdOrEmpty, ciphertextBytes)` |
+| `message` | Agent-to-agent messages | `encodePayload(type, to, conversationId, messageId, threadIdOrEmpty, kemCiphertextBytes, payloadBytes)` |
 | `register` | Relay agent registration | Registration payload bytes |
 | `listen` | Relay listen connection | `encodePayload(sinceCursorOrDash)` |
 | `inbox` | Relay inbox polling | `encodePayload(sinceCursorOrDash, limit)` |
 | `unregister` | Relay unregistration | Empty payload |
 
 `threadId` is part of the signed message payload. Economic thread identity is security-relevant: changing `threadId` changes the signed meaning of the message and MUST invalidate the signature.
+
+`kemCiphertext` (the raw 1120 bytes) is also part of the signed payload. It is the sender's commitment to the key the recipient will derive; a relay that swaps it MUST break the signature, not merely garble decryption.
 
 ### Signature Encoding by Scheme
 
@@ -97,7 +99,7 @@ signData = SHA-256(
 |------|-------------|-------------|
 | `info` | Informational message | `{ "message": "string" }` |
 
-**Key rotation:** To rotate X25519 encryption keys or signing keys, update the registration file (or on-chain registry). Peers will pick up the new keys on their next fetch (cache TTL: 24h recommended). There is no in-band key-update message — this avoids the vulnerability where a compromised key could be used to send a fraudulent key-update.
+**Key rotation:** To rotate the X-Wing encryption key or the signing key, update the registration file (or on-chain registry). Peers will pick up the new keys on their next fetch (cache TTL: 24h recommended). There is no in-band key-update message — this avoids the vulnerability where a compromised key could be used to send a fraudulent key-update.
 
 **Liveness checks:** Use HTTP-level mechanisms (HEAD request to the endpoint, or a `/health` path) rather than protocol-level ping/pong. Encrypting and signing a liveness check message is unnecessary overhead.
 

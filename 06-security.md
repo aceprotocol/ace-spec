@@ -30,7 +30,7 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
 
 5. Decryption
    → Only after signature is verified
-   → X25519 ECDH + HKDF + AES-256-GCM
+   → X-Wing decapsulation + HKDF-SHA256 + AES-256-GCM
 
 6. Body Schema Validation
    → Economic messages: validate required fields per type
@@ -115,12 +115,12 @@ Implementations SHOULD:
 
 - Store private keys in locked memory (mlock) when available
 - Zero key material immediately after use (secure zeroing, not just deallocation)
-- Destroy ephemeral keys in a `defer`/`finally` block
+- Destroy KEM shared secrets and derived AES keys in a `defer`/`finally` block
 - Never log or serialize private key material
 
 ## Peer Key Caching
 
-Agent registration files (containing X25519 public keys) MAY be cached:
+Agent registration files (containing X-Wing public keys) MAY be cached:
 
 - **TTL:** 24 hours recommended
 - **Storage:** Per-peer cache file with appropriate permissions
@@ -132,12 +132,12 @@ Agent registration files (containing X25519 public keys) MAY be cached:
 
 | Threat | Mitigation |
 |--------|-----------|
-| Eavesdropping | E2E encryption (X25519 + AES-256-GCM) |
+| Eavesdropping, including recorded traffic against future quantum computers | E2E encryption (X-Wing hybrid KEM + AES-256-GCM) |
 | Message tampering | Signature verification |
 | Replay attacks | messageId dedup + timestamp freshness |
 | Message transplant | conversationId as AAD in encryption |
 | Impersonation | Signature tied to registered signing key |
-| Key compromise (past messages) | Forward secrecy via ephemeral keys |
+| Sender state compromise | Nothing recoverable: encapsulation randomness and shared secrets are destroyed after use |
 | State-skipping (e.g., invoice without accept) | Mandatory state machine per (conversationId, threadId) |
 | Double-spend (duplicate receipt) | State machine rejects repeated transitions |
 | Cross-conversation thread hijack | Signed `threadId` + reference checks scoped to `(conversationId, threadId)` |
@@ -148,8 +148,19 @@ Agent registration files (containing X25519 public keys) MAY be cached:
 |--------|-------|
 | Endpoint availability (DDoS) | Transport-level concern, not protocol-level |
 | Malicious agent behavior | Handled by reputation (ERC-8004) and settlement mechanisms |
-| Key compromise (future messages) | Requires key rotation via registration file update (or on-chain) |
+| Recipient encryption key compromise | Exposes all messages to that key, past and future, until rotated via registration file update (or on-chain). No ratchet in ACE 1.0. |
+| Quantum forgery of classical signatures | Not retroactive; see § Post-Quantum Posture |
 | Side-channel attacks on encryption | Implementation concern, not protocol-level |
+
+## Post-Quantum Posture
+
+| Layer | ACE 1.0 | Rationale |
+|-------|---------|-----------|
+| Message encryption | **Hybrid post-quantum** — X-Wing (X25519 + ML-KEM-768), see [03-encryption.md](./03-encryption.md) | Recorded ciphertext can be decrypted later by a quantum computer; this cannot be fixed by rotating keys after the fact |
+| Message authentication | Classical — `ed25519`, `secp256k1` | A signature is only ever checked at receipt time; there is no retroactive attack. Keeping classical keys keeps the ACE identity equal to the agent's chain key |
+| Reserved | `ml-dsa-65` (FIPS 204), see [signing-schemes/ml-dsa-65.md](./signing-schemes/ml-dsa-65.md) | Promoted when a supported chain exposes a post-quantum signature precompile or when classical signatures are deprecated for the deployment |
+
+Pure (non-hybrid) ML-KEM is deliberately not used: every production deployment of post-quantum key exchange (Apple, Signal, Chrome, Cloudflare, IETF TLS/MLS suites) is hybrid, so a lattice break does not leave the protocol weaker than classical X25519.
 
 ## Implementation Checklist
 
@@ -159,6 +170,7 @@ Agent registration files (containing X25519 public keys) MAY be cached:
 - [ ] Schema validation on both send and receive
 - [ ] State machine enforcement for economic messages (send and receive sides)
 - [ ] State machine persistence for crash recovery
+- [ ] X-Wing conformance against the draft test vectors (`test-vectors.json` → `xwing`)
 - [ ] Constant-time cryptographic comparisons
 - [ ] Secure key material handling (mlock, zeroing)
 - [ ] Peer key cache with TTL and invalidation

@@ -17,23 +17,22 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
    → Verify `to` field matches recipient's ACE ID
 
 2. Timestamp Freshness (BEFORE expensive operations)
-   → All messages: reject if |now - timestamp| > 5 minutes
+   → Reject unless floor <= timestamp <= now + 5 minutes
+     (floor: see § Replay Protection)
+   → Reject if timestamp <= H (the seen store's horizon)
 
-3. Replay Detection (atomic check-and-reserve)
-   → Atomically: if messageId seen → reject; else reserve messageId
-   → Reservation prevents concurrent duplicates before full processing
-   → If the message fails BEFORE step 4 succeeds (malformed encoding, wrong
-     lengths, bad signature), release the reservation: unauthenticated input
-     MUST NOT be able to burn a messageId
-   → Once the signature has verified, the reservation is kept on ANY later
-     failure (decryption, body schema, state machine): an authentic message is
-     processed at most once regardless of outcome, so a captured message that
-     was rejected cannot be replayed later when the state would allow it
+3. Replay Check
+   → Reject if messageId is in the seen store
 
 4. Signature Verification (BEFORE decryption)
    → Verify signature.scheme is supported
    → Verify signature against sender's public key
    → Reconstruct signData and compare
+   → Then atomically: if messageId is in the seen store → reject; else insert
+     (messageId, timestamp). Nothing enters the store before its signature
+     verifies, and an entry is never removed on a later failure (decryption,
+     body schema, state machine): an authentic message is processed at most
+     once regardless of outcome
 
 5. Decryption
    → Only after signature is verified
@@ -57,24 +56,36 @@ Note: On the **sender side**, the state machine uses a two-phase pattern:
   (b) Perform cryptographic operations (encrypt + sign)
   (c) Commit: apply the state transition only after crypto succeeds
 This prevents state corruption if encryption or signing fails.
-
-8. Mark as Seen (atomic)
-   → Add messageId to seen set
-   → Economic messages: persist immediately (crash-resilient)
-   → System/social messages: batch-persist acceptable
-   → MUST be atomic to prevent concurrent duplicates
 ```
 
 ## Replay Protection
 
+Invariant: a messageId MUST be rejected for as long as its message could still
+pass step 2.
+
 ### Seen Message Store
 
-Implementations MUST maintain a persistent set of seen messageIds to prevent replay attacks.
+The seen store holds entries `(messageId, timestamp)`, where `timestamp` is the
+message's signed envelope timestamp, and a horizon `H`. Step 2 rejects every
+message with `timestamp <= H`, so removing an entry is safe once `H` covers it:
 
-- **Storage:** File-based (e.g., `~/.ace/seen_messages.json`) or database
-- **Capacity:** Minimum 100,000 entries with LRU eviction
-- **Persistence:** Economic message IDs MUST be persisted immediately. System/social message IDs MAY be batch-persisted.
-- **File permissions:** 0600 (owner read/write only)
+- **Removal:** only the entry with the smallest `timestamp` may be removed, and
+  `H` is set to that `timestamp`. Remove when the store is at capacity, or when
+  the entry's `timestamp` is below the floor.
+- **New store:** `H = now - 5 minutes`.
+- **Capacity:** Minimum 100,000 entries
+- **Persistence:** Entries and `H` are persisted together. Economic messages
+  MUST be persisted before they are acted on; system/social messages MAY be
+  batch-persisted.
+- **Storage:** File-based (e.g., `~/.ace/seen_messages.json`) or database,
+  permissions 0600 (owner read/write only)
+
+### Floor
+
+The floor is `now - 5 minutes`. A receiver collecting messages queued while it
+was offline MAY set a fixed earlier floor. Nothing else changes: entries removed
+while the backlog is processed raise `H`, so a redelivered message is rejected
+at step 2.
 
 ### Timestamp Freshness
 
@@ -84,7 +95,8 @@ Timestamps prevent delayed replay of old messages:
 |-----------------|-----------|
 | All messages | 5 minutes |
 
-The 5-minute window is an **anti-replay** mechanism, not a business validity constraint. Business-level validity is handled by per-message fields:
+The future bound is fixed at 5 minutes; the past bound is the floor. Together
+with the store's horizon, the window is an **anti-replay** mechanism, not a business validity constraint. Business-level validity is handled by per-message fields:
 - `offer.ttl` — how long an offer remains valid
 - `rfq.ttl` — how long a request remains open
 - `deliver.metadata.expiresAt` — when a delivery link expires
@@ -171,7 +183,7 @@ Pure (non-hybrid) ML-KEM is deliberately not used: every production deployment o
 
 ## Implementation Checklist
 
-- [ ] Replay detection with persistent storage
+- [ ] Seen store with horizon `H`, persisted
 - [ ] Signature verification before decryption
 - [ ] Timestamp freshness enforcement
 - [ ] Schema validation on both send and receive

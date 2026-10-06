@@ -119,10 +119,10 @@ A peer cache pins at most one binding `(scheme, signingPublicKey, encryptionPubl
 - A binding is adopted only after it verifies (§ Peer Record, or [01-identity.md](./01-identity.md) § Validation for a registration file).
 - A binding with `registeredAt > now + TIMESTAMP_WINDOW_SECONDS` is invalid.
 - Same encryption key as the pin: keep it, with `registeredAt = max(pinned, candidate)`.
-- Different encryption key: adopted only if the candidate's `registeredAt` is strictly greater than the pinned value. Otherwise the candidate is rejected and the pin is kept.
+- Different encryption key: adopted only if the candidate carries a verified `registrationSignature` (a relay peer record) and its `registeredAt` is strictly greater than the pinned value. Otherwise the candidate is rejected (`stale_peer_binding`) and the pin is kept.
 - A different signing key or scheme for the same ACE ID is invalid.
 - Cache TTL expiry (24 hours recommended) only triggers a refresh. It MUST NOT remove the pin.
-- A registration file has no signed timestamp: the time it is pinned stands in for `registeredAt`.
+- A registration file signs neither its encryption key nor a timestamp. It is adopted only when no pin exists or its encryption key equals the pin; it MUST NOT rotate a pinned key. When it is first pinned, the pin time stands in for `registeredAt`.
 
 #### Profile Fields
 

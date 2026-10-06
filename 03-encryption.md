@@ -50,7 +50,7 @@ The same construction is used by Apple's CryptoKit post-quantum HPKE, XMTP, and 
 6. AES-256-GCM open(aesKey, nonce, ciphertext, tag, aad = UTF-8(conversationId)) → plaintext
 ```
 
-Decapsulation never fails on malformed ciphertext: ML-KEM uses implicit rejection and X-Wing hashes the X25519 component into the shared secret. A tampered `kemCiphertext` therefore surfaces as an AES-GCM tag failure in step 6 (and, before that, as a signature failure, because `kemCiphertext` is part of the signed message payload — see [04-messages.md](./04-messages.md)).
+ML-KEM uses implicit rejection and X-Wing hashes the X25519 component into the shared secret, so a tampered `kemCiphertext` normally surfaces as an AES-GCM tag failure in step 6. X25519 libraries additionally refuse an all-zero DH output, so a `ct_X` that is a low-order point makes decapsulation itself fail; either way the message is rejected. In practice neither is reached: `kemCiphertext` is part of the signed message payload (see [04-messages.md](./04-messages.md)), so tampering fails signature verification first.
 
 ## X-Wing Summary
 

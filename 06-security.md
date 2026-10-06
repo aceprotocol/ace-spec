@@ -15,6 +15,7 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
 1. Envelope Validation
    → Verify ace version, required fields present
    → Verify `to` field matches recipient's ACE ID
+   → Reject unknown `type` and a `conversationId` that is not 64 lowercase hex
 
 2. Timestamp Freshness (BEFORE expensive operations)
    → Reject unless floor <= timestamp <= now + 5 minutes
@@ -45,7 +46,7 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
 7. State Machine Validation (economic messages only)
    → Verify threadId is present for economic messages
    → Validate threadId format (non-empty, max 256 chars, no control chars)
-   → Verify any referenced message IDs (`offerId`, `invoiceId`, `deliverId`) belong to the same (conversationId, threadId)
+   → Verify any referenced message IDs (`offerId`, `referenceId`, `deliverId`) belong to the same (conversationId, threadId)
    → Verify transition is valid for current (conversationId, threadId) state
    → Apply state transition atomically
    → rejected and confirmed are terminal — reject all economic messages

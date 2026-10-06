@@ -56,7 +56,7 @@ All fields are optional:
 | `description` | string | One-line description (max 256 chars) |
 | `tags` | string[] | Free-form tags (max 10, each max 32 chars, lowercase alphanumeric + hyphen) |
 | `capabilities` | string[] | Capability declarations (max 20, same format as tags) |
-| `chains` | string[] | Supported chains in CAIP-2 format (max 10) |
+| `chains` | string[] | Supported chains in CAIP-2 format, `^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$` (max 10) |
 | `endpoint` | string | HTTPS endpoint for ACE messages |
 | `pricing` | object | `{ currency: string, maxAmount?: string }` |
 

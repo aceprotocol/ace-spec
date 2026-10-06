@@ -35,9 +35,11 @@ Every ACE message uses this envelope format:
 | `messageId` | Yes | string | UUID v4, unique per message |
 | `from` | Yes | string | Sender's ACE ID |
 | `to` | Yes | string | Recipient's ACE ID |
-| `conversationId` | Yes | string | Deterministic conversation identifier (see [03-encryption.md](./03-encryption.md)) |
-| `type` | Yes | string | Message type (see below) |
+| `conversationId` | Yes | string | Deterministic conversation identifier: 64 lowercase hex characters (see [03-encryption.md](./03-encryption.md)) |
+| `type` | Yes | string | Message type (see below). A type not defined in § Message Types MUST be rejected. |
 | `threadId` | Conditional | string | Business session identifier. **REQUIRED for all economic messages**, optional for system/social messages. Allows multiple concurrent deals between the same agent pair within one `conversationId`. Free-form string chosen by the initiator (e.g., UUID, deal reference). All messages in a business flow MUST share the same `threadId`. Constraints: max 256 characters, no control characters (U+0000–U+001F, U+007F). |
+
+Wherever this specification limits a string to N "characters", it counts Unicode code points.
 | `timestamp` | Yes | number | Unix timestamp in seconds |
 | `body` | — | object | Message payload (schema depends on `type`). **Conceptual only**: in transit, the body is encrypted inside `encryption.payload`. Not present as a cleartext field on the wire. |
 | `encryption` | Yes | object | Encryption envelope (see [03-encryption.md](./03-encryption.md)) |
@@ -48,6 +50,8 @@ Every ACE message uses this envelope format:
 ### Note on Encryption
 
 The `body` field in the envelope above shows the **decrypted** content for readability. In transit, the body is encrypted inside `encryption.payload`. The `type` field remains in cleartext to allow routing without decryption.
+
+The decrypted body MUST be a JSON object (RFC 8259; the non-standard literals `NaN` and `Infinity` are invalid) nested at most 32 levels deep, the top-level object being level 0. An optional field whose value is `null` is treated as absent.
 
 ## Signature Construction
 
@@ -114,7 +118,7 @@ Economic messages carry contractual weight. Schema validation is MANDATORY on bo
 | `accept` | Accept an offer | `offerId` | |
 | `reject` | Decline an offer | | `reason` |
 | `invoice` | Request payment | `offerId`, `amount`, `currency`, `settlementMethod` | `settlementDetails` |
-| `receipt` | Confirm payment | `invoiceId`, `amount`, `currency`, `settlementMethod`, `proof` | |
+| `receipt` | Confirm payment | `referenceId`, `amount`, `currency`, `settlementMethod`, `proof` | |
 | `deliver` | Deliver work product | `type` | `content`, `contentType`, `uri`, `metadata` |
 | `confirm` | Confirm delivery accepted | `deliverId` | `message` |
 
@@ -218,7 +222,7 @@ Receivers MUST verify that the referenced `offerId` exists in the same `(convers
 
 ```json
 {
-  "invoiceId": "550e8400-e29b-41d4-a716-446655440000",
+  "referenceId": "550e8400-e29b-41d4-a716-446655440000",
   "amount": "3.50",
   "currency": "USD",
   "settlementMethod": "crypto/instant",
@@ -231,13 +235,13 @@ Receivers MUST verify that the referenced `offerId` exists in the same `(convers
 
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
-| `invoiceId` | Yes | string | messageId of the invoice |
+| `referenceId` | Yes | string | messageId of the message this payment settles: the `invoice`, or on the pre-paid path (no invoice) the `accept` |
 | `amount` | Yes | string | Amount paid |
 | `currency` | Yes | string | Currency code |
 | `settlementMethod` | Yes | string | Settlement method used |
 | `proof` | Yes | object | Payment proof (free-form, method-specific) |
 
-Receivers MUST verify that the referenced `invoiceId` exists in the same `(conversationId, threadId)` history before accepting this message.
+Receivers MUST verify that `referenceId` exists in the same `(conversationId, threadId)` history before accepting this message: an `invoice` when the thread is `invoiced`, the `accept` when it is `accepted` (pre-paid).
 
 ### deliver
 
@@ -356,8 +360,9 @@ Any transition not listed above MUST be rejected.
 - Implementations MUST enforce the state machine for all economic messages.
 - State MUST be tracked per `(conversationId, threadId)` pair, ensuring thread isolation across conversations.
 - `threadId` MUST be validated: non-empty, max 256 characters, no control characters (U+0000–U+001F, U+007F).
-- Referenced message IDs (`offerId`, `invoiceId`, `deliverId`) MUST resolve inside the same `(conversationId, threadId)` history before the transition is accepted.
+- Referenced message IDs (`offerId`, `referenceId`, `deliverId`) MUST resolve inside the same `(conversationId, threadId)` history before the transition is accepted.
 - State SHOULD be persisted for crash recovery.
+- Implementations MAY bound the number of threads and the history length per thread. When a bound is reached they MUST reject the message; they MUST NOT discard existing thread state to make room, since a forgotten terminal thread could be reopened.
 - **Sender side:** Implementations MUST pre-check the transition validity before performing cryptographic operations (encrypt + sign). The state transition MUST only be committed after all cryptographic operations succeed. This prevents state corruption if encryption or signing fails.
 - **Receiver side:** The state machine validation occurs after decryption and body schema validation (pipeline step 7). This ensures only fully verified messages advance the state.
 - `rejected` and `confirmed` are terminal states — no economic messages are allowed after entering these states.
@@ -387,5 +392,5 @@ Buyer                          Seller
 
 - **Counter-offer:** Seller sends a new `offer` instead of waiting for `accept`
 - **Reject:** Buyer sends `reject` after receiving `offer`
-- **Pre-paid:** Buyer sends `receipt` immediately after `accept` (no invoice needed). In this case, `invoiceId` SHOULD be set to the `messageId` of the `accept` message.
+- **Pre-paid:** Buyer sends `receipt` immediately after `accept` (no invoice needed). In this case, `referenceId` MUST be set to the `messageId` of the `accept` message.
 - **Deliver-first:** Seller sends `deliver` before `invoice` (trust-based)

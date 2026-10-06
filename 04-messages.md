@@ -51,6 +51,7 @@ Normative constants. Every implementation and every relay uses these values.
 | `MAX_ENVELOPE_BYTES` | 131072 | Serialized envelope; relay request body limit; SSE data limit |
 | `MAX_JSON_DEPTH` | 32 | Body nesting depth; the top-level object is depth 0 |
 | `MAX_THREAD_ID_LENGTH` | 256 | Code points |
+| `MAX_OPEN_THREADS_PER_PEER` | 1000 | non-terminal threads held per peer |
 | `TIMESTAMP_WINDOW_SECONDS` | 300 | Future bound for messages; freshness window for relay requests |
 | `OFFLINE_WINDOW_SECONDS` | 604800 | Floor offset for a receiver collecting queued messages (`now - 7 days`); relay message TTL MUST NOT exceed this |
 | `MAX_REGISTRATION_FILE_BYTES` | 1048576 | Registration file |
@@ -506,7 +507,8 @@ A failed check does not change state.
 - `threadId` MUST be a valid thread ID (§ Encoding Rules).
 - State SHOULD be persisted for crash recovery.
 - Implementations MAY bound the number of threads and the history length per thread. When a bound is reached they MUST reject the message; they MUST NOT discard existing thread state to make room, since a forgotten terminal thread could be reopened.
-- **Retention:** an implementation MAY delete a terminal thread (`rejected` or `confirmed`) once its head entry's timestamp is older than `now - 30 days` (2592000 seconds, greater than `OFFLINE_WINDOW_SECONDS`). Non-terminal threads MUST NOT be discarded.
+- **Retention:** an implementation MAY delete a terminal thread (`rejected` or `confirmed`) once its head entry's timestamp is older than `now - 30 days` (2592000 seconds, greater than `OFFLINE_WINDOW_SECONDS`). It MAY also delete a non-terminal thread in which the local party has sent no message, once its head entry is older than `now - 30 days` (no local obligation exists). Any other non-terminal thread MUST NOT be discarded.
+- **Open-thread bound:** a receiver bounds the non-terminal threads it holds per peer (`MAX_OPEN_THREADS_PER_PEER` = 1000). A message that would open another thread beyond the bound is rejected with `limit_exceeded`; existing threads are unaffected.
 - **Sender side:** Implementations MUST pre-check the transition (§ Check Order) before performing cryptographic operations (encrypt + sign). The state transition MUST only be committed after all cryptographic operations succeed. This prevents state corruption if encryption or signing fails.
 - **Receiver side:** The state machine validation occurs after decryption and body schema validation (pipeline step 7 in [06-security.md](./06-security.md)). This ensures only fully verified messages advance the state.
 - `rejected` and `confirmed` are terminal states — no economic messages are allowed after entering these states.

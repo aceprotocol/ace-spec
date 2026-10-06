@@ -90,20 +90,20 @@ Every ACE agent SHOULD publish a registration file.
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `ace` | Yes | string | Protocol version. MUST be `"1.0"` |
-| `id` | Yes | string | ACE ID (`ace:sha256:<fingerprint>`) |
+| `id` | Yes | string | ACE ID. MUST equal `ace:sha256:hex(SHA-256(signingPublicKey))` (see § Validation) |
 | `name` | Yes | string | Human-readable agent name. Non-empty, no control characters (U+0000–U+001F, U+007F); no length limit |
 | `description` | No | string | One-line description of the agent |
-| `endpoint` | Yes | string | URL for receiving ACE messages. Protocol does not prescribe the transport (REST, WebSocket, SSE, gRPC, etc.) |
-| `tier` | Yes | number | Identity tier: 0 or 1 |
+| `endpoint` | Yes | string | URL for receiving ACE messages. MUST match the ACE HTTPS URL grammar ([04-messages.md](./04-messages.md) § Encoding Rules). The protocol does not prescribe the transport behind it (REST, WebSocket, SSE, gRPC, etc.) |
+| `tier` | Yes | integer | Identity tier: 0 or 1 |
 | `hardwareBacking` | No | string | Optional key custody metadata. One of `secure-enclave`, `tpm`, `hsm`, `tee`. This is orthogonal to trust tier. |
 | `signing` | Yes | object | Signing configuration |
 | `signing.scheme` | Yes | string | Signing scheme from the registry (e.g., `"ed25519"`, `"secp256k1"`) |
-| `signing.address` | Yes | string | Address derived from signing key (format depends on scheme) |
-| `signing.signingPublicKey` | No | string | Base64-encoded raw signing public key. REQUIRED for `secp256k1` (address is a hash, cannot recover public key). Optional for `ed25519` (address IS the public key in Base58). |
-| `signing.encryptionPublicKey` | Yes | string | Base64-encoded X-Wing public key (exactly 1216 bytes) for E2E encryption. Validators MUST reject any other length. |
-| `capabilities` | No | array | List of capabilities the agent offers |
-| `settlement` | No | array | Supported settlement methods (e.g., `["crypto/instant", "fiat/*"]`) |
-| `chains` | No | array | Blockchain addresses for receiving payments |
+| `signing.address` | Yes | string | Address derived from signing key (format depends on scheme; see § Validation) |
+| `signing.signingPublicKey` | Conditional | string | Canonical Base64 of the raw signing public key. REQUIRED for `secp256k1` (the address is a hash): a 33-byte compressed point. Optional for `ed25519` (the address IS the public key in Base58); if present it MUST equal `Base58Decode(address)`. |
+| `signing.encryptionPublicKey` | Yes | string | Canonical Base64 of the X-Wing public key (exactly 1216 bytes) for E2E encryption. Validators MUST reject any other length. |
+| `capabilities` | No | array | Capability objects (see below); each MUST have string `id` and `description` |
+| `settlement` | No | array | Array of strings: supported settlement methods (e.g., `["crypto/instant", "fiat/*"]`) |
+| `chains` | No | array | Objects with string `network` (CAIP-2) and string `address`: blockchain addresses for receiving payments |
 
 ### Capability Object
 
@@ -117,3 +117,20 @@ Every ACE agent SHOULD publish a registration file.
 | `pricing.model` | Yes | string | `"per-call"`, `"per-token"`, `"per-hour"`, `"flat"` |
 | `pricing.amount` | Yes | string | Price amount (string to avoid floating point) |
 | `pricing.currency` | Yes | string | Currency code (`"USD"`, `"USDC"`, `"ETH"`, etc.) |
+
+### Validation
+
+A registration file is valid only if all of the following hold. Validators MUST check every rule; none is optional or deferred to a later step.
+
+1. The file is a JSON object of at most `MAX_REGISTRATION_FILE_BYTES` (1048576) bytes; `ace` is `"1.0"`; required fields are present with the types in § Field Reference. Unknown fields are ignored.
+2. `signing.scheme` is `ed25519` or `secp256k1`.
+3. The signing public key is determined by scheme:
+   - `ed25519`: `Base58Decode(signing.address)`, which MUST be 32 bytes. If `signing.signingPublicKey` is present it MUST decode to the same 32 bytes.
+   - `secp256k1`: `signing.signingPublicKey` MUST decode to a 33-byte compressed point (prefix `02` or `03`, on the curve). `signing.address` MUST equal the address derived from that key ([signing-schemes/secp256k1.md](./signing-schemes/secp256k1.md)), compared case-insensitively (both sides lowercased).
+4. `id` MUST equal `ace:sha256:hex(SHA-256(signingPublicKey))` over the key from rule 3.
+5. `signing.encryptionPublicKey` decodes to exactly 1216 bytes.
+6. `endpoint` matches the ACE HTTPS URL grammar.
+7. All Base64 fields are canonical ([04-messages.md](./04-messages.md) § Encoding Rules).
+8. `capabilities`, `settlement` and `chains`, if present, have the shapes in § Field Reference.
+
+A registration file carries no signed timestamp. A peer cache that pins one uses the time it was pinned in place of `registeredAt` ([02-discovery.md](./02-discovery.md) § Rollback Barrier).

@@ -2,6 +2,8 @@
 
 ## Overview
 
+**Status:** extension draft. `feedback` is not one of the message types defined in [04-messages.md](./04-messages.md), so ACE 1.0 receivers reject it (§ Envelope Decoding) until this chapter is promoted. The Reputation API below is not part of the relay API in [08-relay.md](./08-relay.md).
+
 ACE Reputation is an open, off-chain reputation system built on top of the ACE economic message flow. Feedback is anchored to real completed transactions (`confirm` messages), stored and aggregated by Relays, and optionally synced to on-chain registries (ERC-8004) for high-value agents.
 
 ### Design Principles

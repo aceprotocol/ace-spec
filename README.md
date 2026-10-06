@@ -44,11 +44,11 @@ Layer 5: Reputation               → Transaction-anchored feedback, scoring, po
 ACE follows these versioning rules:
 
 1. **Minor versions (1.x) are backward compatible.** A v1.1 agent MUST be able to communicate with a v1.0 agent.
-2. **Unknown message types MUST be ignored.** If a v1.0 agent receives a message with an unknown `type`, it MUST silently discard it. It MUST NOT reject the connection or respond with an error.
-3. **Unknown fields MUST be ignored.** If a message or registration file contains fields not defined in the agent's version of the spec, those fields MUST be ignored, not rejected.
+2. **A message whose `type` is not defined MUST NOT be processed.** Receivers discard it (an SDK quarantines it, see [06-security.md](./06-security.md) § Durable Delivery) and MUST NOT break the connection or respond with an error.
+3. **Unknown fields MUST be ignored.** Fields not defined in the agent's version of the spec MUST be ignored, not rejected. This applies to the message envelope and its nested `encryption` and `signature` objects, message bodies, registration files, registration requests and peer records.
 4. **Major versions (2.x) MAY be breaking.** A v2.0 agent is NOT required to be compatible with v1.x agents.
 
-These rules ensure the protocol can evolve without coordination — new message types and fields can be introduced in minor versions, and older agents will simply ignore what they don't understand.
+These rules ensure the protocol can evolve without coordination — new fields can be introduced in minor versions and older agents ignore them; a new message type is discarded by agents that do not define it.
 
 ## Specification Documents
 
@@ -57,10 +57,11 @@ These rules ensure the protocol can evolve without coordination — new message 
 | [01-identity.md](./01-identity.md) | Identity tiers, registration file format |
 | [02-discovery.md](./02-discovery.md) | Discovery mechanisms: direct, well-known, registry, ERC-8004 |
 | [03-encryption.md](./03-encryption.md) | X-Wing hybrid post-quantum KEM + HKDF-SHA256 + AES-256-GCM encryption scheme |
-| [04-messages.md](./04-messages.md) | Message envelope, types, and economic schemas |
+| [04-messages.md](./04-messages.md) | Encoding rules, size limits, message envelope, types, economic schemas and state machine |
 | [05-settlement.md](./05-settlement.md) | Settlement methods: crypto/*, fiat/* |
-| [06-security.md](./06-security.md) | Security model: replay protection, signature verification, fail-stop |
+| [06-security.md](./06-security.md) | Security model: processing pipeline, replay protection, durable delivery, fail-stop |
 | [07-reputation.md](./07-reputation.md) | Reputation system: transaction-anchored feedback, scoring, anti-gaming |
+| [08-relay.md](./08-relay.md) | Relay HTTP API: registration, discovery, send, inbox, listen, intents, errors |
 
 ## Signing Schemes
 

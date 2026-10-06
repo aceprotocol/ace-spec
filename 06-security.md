@@ -9,48 +9,53 @@ ACE follows two core security principles:
 
 ## Message Processing Pipeline
 
-Receivers MUST process ALL messages (economic, system, and social) through this pipeline in order. A failure at any step causes the message to be rejected.
+Receivers MUST process ALL messages (economic, system, and social) through this pipeline in order. A failure at any step causes the message to be rejected; the first failure determines the error code. The sender identity (ACE ID, scheme, signing key, encryption key) comes from a verified peer binding ([02-discovery.md](./02-discovery.md) § Rollback Barrier), never from the envelope itself.
 
 ```
 1. Envelope Validation
-   → Verify ace version, required fields present
-   → Verify `to` field matches recipient's ACE ID
-   → Reject unknown `type` and a `conversationId` that is not 64 lowercase hex
+   → Apply 04-messages.md § Envelope Decoding        (invalid_envelope | unsupported_version)
+   → `to` MUST equal the recipient's ACE ID           (wrong_recipient)
+   → `from` MUST equal the ACE ID of the sender
+     identity being verified against                   (invalid_envelope)
+   → `signature.scheme` MUST equal the sender's
+     registered scheme                                 (scheme_mismatch)
+   → `conversationId` MUST equal
+     computeConversationId(senderEncKey, recipientEncKey)
+     over the verified keys                            (invalid_envelope)
 
 2. Timestamp Freshness (BEFORE expensive operations)
-   → Reject unless floor <= timestamp <= now + 5 minutes
-     (floor: see § Replay Protection)
-   → Reject if timestamp <= H or timestamp <= H[from] (the seen store's horizons)
+   → Reject unless floor <= timestamp <= now + TIMESTAMP_WINDOW_SECONDS
+     (floor: see § Floor)                              (stale_timestamp)
+   → Reject if timestamp <= H or timestamp <= H[from]
+     (the seen store's horizons)                       (replay)
 
 3. Replay Check
-   → Reject if (from, messageId) is in the seen store
+   → Reject if (from, messageId) is in the seen store  (replay)
 
 4. Signature Verification (BEFORE decryption)
-   → Verify signature.scheme is supported
-   → Verify signature against sender's public key
-   → Reconstruct signData and compare
-   → Then atomically: if (from, messageId) is in the seen store → reject; else insert
-     (messageId, from, timestamp). Nothing enters the store before its signature
-     verifies, and an entry is never removed on a later failure (decryption,
-     body schema, state machine): an authentic message is processed at most
-     once regardless of outcome
+   → Reconstruct signData (04-messages.md § Signing Contexts, action `message`)
+   → Verify with the sender's registered key under the
+     strict rules of signing-schemes/*.md              (invalid_signature)
+   → Then atomically commit to the seen store (§ Seen Message Store, Commit). Nothing enters
+     the store before its signature verifies, and an entry is never removed
+     on a later failure (decryption, body schema, state machine): an
+     authentic message is processed at most once regardless of outcome
 
 5. Decryption
    → Only after signature is verified
-   → X-Wing decapsulation + HKDF-SHA256 + AES-256-GCM
+   → X-Wing decapsulation + HKDF-SHA256 + AES-256-GCM  (decryption_failed)
 
-6. Body Schema Validation
-   → Economic messages: validate required fields per type
+6. Body Validation
+   → Apply 04-messages.md § Body Rules                 (invalid_body)
    → Reject malformed bodies (defense in depth)
 
 7. State Machine Validation (economic messages only)
-   → Verify threadId is present for economic messages
-   → Validate threadId format (non-empty, max 256 chars, no control chars)
-   → Verify any referenced message IDs (`offerId`, `referenceId`, `deliverId`) belong to the same (conversationId, threadId)
-   → Verify transition is valid for current (conversationId, threadId) state
+   → Apply 04-messages.md § Check Order: party check, transition, role
+     check, reference positions (§ References), bounds
+                     (wrong_party | transition_not_allowed | wrong_role |
+                      bad_reference | limit_exceeded)
    → Apply state transition atomically
    → rejected and confirmed are terminal — reject all economic messages
-   → See 04-messages.md § State Machine for the full transition table
 
 Note: On the **sender side**, the state machine uses a two-phase pattern:
   (a) Pre-check: verify the transition would be valid (fail fast)
@@ -66,70 +71,124 @@ pass step 2.
 
 ### Seen Message Store
 
-The seen store holds entries `(messageId, from, timestamp)`, where `from` and
+The seen store holds entries `E` of `(timestamp, from, messageId)`, where `from` and
 `timestamp` are the message's signed sender and envelope timestamp, a horizon
 `H`, and per-sender horizons `H[from]`. Step 2 rejects every message with
 `timestamp <= H` or `timestamp <= H[from]`, so removing an entry is safe once a
-horizon covers it:
+horizon covers it.
 
-- **Removal:** entries already covered by a horizon may be discarded. Otherwise,
-  only the entry with the smallest `timestamp` may be removed.
-  When its `timestamp` is below the floor, raise `H` to it. When the store is
-  over capacity, raise only `H[from]` of that entry's sender to it: a sender
-  flooding the store then delays only its own messages, never anyone else's.
-- **Sender horizons:** at most `capacity` are kept. Drop any `H[from] <= H`;
-  if still over, fold the lowest into `H` (raise `H` to them and drop them).
-- **New store:** online defaults to `H = now - 5 minutes`, no sender horizons.
-  A first-time offline receiver MAY initialize `H` just below its explicit retention
-  floor. Missing or corrupt state beside existing message history MUST NOT be
+Entries are ordered by `(timestamp, from, messageId)` ascending; strings compare by
+their UTF-8 bytes. `capacity` is an integer >= 1 and the sender quota is
+`Q = max(1, floor(capacity / 16))`.
+
+**Accepts.** `(messageId, from, timestamp)` is accepted iff `timestamp > H`,
+`timestamp > H[from]` (if `H[from]` exists) and `(from, messageId)` is not in `E`.
+
+**Commit** `(messageId, s, ts, floor)`: if the message is not accepted, the commit fails.
+Otherwise insert `(ts, s, messageId)`, then:
+
+1. **Floor.** While the smallest entry has `timestamp < floor`: remove it and raise `H` to
+   its timestamp.
+2. **Sender quota.** While sender `s` holds more than `Q` entries: remove `s`'s smallest
+   entry, raise `H[s]` to its timestamp, and remove every entry of `s` with
+   `timestamp <= H[s]`.
+3. **Capacity.** While `|E| > capacity`: remove the smallest entry `e`, raise `H[e.from]`
+   to its timestamp, and remove every entry of `e.from` with `timestamp <= H[e.from]`.
+4. **Sender horizons.** Delete every `H[x] <= H`. If more than `capacity` sender horizons
+   remain, sort them by `(H[x], x)` ascending and fold the first
+   `count - floor(capacity / 2)` into `H` (raise `H` to each, delete it); then remove
+   every entry with `timestamp <= H` and delete every `H[x] <= H` again.
+
+"Raise X to t" means `X = max(X, t)`. After raising any horizon, the entries it covers
+are removed in the same step. The quota bounds what one sender can occupy; it does not stop
+Sybil senders. Capacity eviction can still raise an honest sender's `H[from]`, which only
+rejects that sender's *older* out-of-order messages.
+
+- **New store:** `H = now - TIMESTAMP_WINDOW_SECONDS` for an online receiver, or
+  `H = floor - 1` for a receiver using an offline floor, on first use only. No sender
+  horizons. Missing or corrupt state beside existing message history MUST NOT be
   treated as first use.
-- **Capacity:** Minimum 100,000 entries
-- **Persistence:** Entries, `H` and the sender horizons are persisted together.
-  Exported entries MUST be above both horizons, including after same-second eviction.
-  Restoring a valid export MUST preserve replay decisions. Economic messages
-  MUST be persisted before they are acted on; system/social messages MAY be
-  batch-persisted.
-- **Storage:** File-based (e.g., `~/.ace/seen_messages.json`) or database,
-  permissions 0600 (owner read/write only)
+- **Capacity:** Minimum 100,000 entries (the SDK default).
+- **Persistence:** Entries, `H` and the sender horizons are persisted together. The export
+  is canonical: entries sorted by `(timestamp, from, messageId)` ascending, sender horizons
+  sorted by sender. Every exported entry is above both horizons and unique. Restoring an
+  export validates these properties and then normalizes it (step 2 for each sender in
+  ascending order, then steps 3 and 4), so restoring preserves replay decisions. File
+  format: § Appendix A.
+- **Storage:** File or database, permissions 0600 (owner read/write only).
 
 ### Floor
 
-The floor is `now - 5 minutes`. A receiver collecting messages queued while it
-was offline MAY set a fixed earlier floor. Nothing else changes: entries removed
-while the backlog is processed raise `H`, so a redelivered message is rejected
-at step 2. Use that floor for every message, live ones included, until the
-backlog is done: a live message processed with the default floor removes the
-backlog entries below it and raises `H` past any backlog message not yet
-processed.
+The floor is a value in `[0, now]`. An online receiver uses
+`now - TIMESTAMP_WINDOW_SECONDS`. A receiver that collects messages queued at a relay uses
+`now - OFFLINE_WINDOW_SECONDS` (the SDK receive pipeline default). Relays MUST NOT retain a
+message longer than `OFFLINE_WINDOW_SECONDS`, so every queued message stays above that floor.
 
-### Durable delivery
-
-Persist a pending signed envelope together with its resulting thread state before
-sending it. Uncertain network outcomes retry the same envelope and message ID;
-a retry MUST NOT advance the thread twice. Clear pending delivery only after acknowledgement.
-
-A receiver MUST persist the message effect before acknowledging delivery. Use a
-tentative replay state and commit it only with durable consumption; on storage or
-hardware failure, restore the whole previous replay state, including horizons.
-Permanently invalid envelopes SHOULD be quarantined by a full-envelope fingerprint
-so a forged sender/message ID cannot poison an authentic delivery. A cursor may
-advance past durable rejections, but MUST stop before transient failures.
+A receiver MUST use the same floor for every message, live ones included: a live message
+processed with a narrower floor would remove entries below it and raise `H` past queued
+messages not yet processed.
 
 ### Timestamp Freshness
 
 Timestamps prevent delayed replay of old messages:
 
-| Message Category | Max Drift |
-|-----------------|-----------|
-| All messages | 5 minutes |
+| Bound | Value |
+|-------|-------|
+| Future | `now + TIMESTAMP_WINDOW_SECONDS` (5 minutes) |
+| Past | The floor |
+| Direct (non-relay) delivery | `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS` in addition |
 
-The future bound is fixed at 5 minutes; the past bound is the floor. Together
-with the store's horizon, the window is an **anti-replay** mechanism, not a business validity constraint. Business-level validity is handled by per-message fields:
+Together with the store's horizons, the window is an **anti-replay** mechanism, not a business validity constraint. Business-level validity is handled by per-message fields:
 - `offer.ttl` — how long an offer remains valid
 - `rfq.ttl` — how long a request remains open
 - `deliver.metadata.expiresAt` — when a delivery link expires
 
 Implementations SHOULD use NTP-synchronized clocks.
+
+## Durable Delivery
+
+### Receiver
+
+A receiver commits an accepted message in this order. Each step is durable before the next
+begins:
+
+1. Write the delivery record (the parsed message and the resulting thread snapshot). This is
+   the commit point: a failure here leaves no trace and the message is retried.
+2. Write the thread state.
+3. Write the replay state (the tentative seen store that includes this message).
+4. Hand the message to the application.
+5. Mark the delivery as handed over.
+6. Advance the cursor.
+
+Replay state is updated on a copy and swapped in only after step 3 succeeds. On restart,
+recovery repairs thread and replay state from delivery records and hands over every record
+not yet marked. The application MUST persist its effect idempotently, keyed by
+`(from, messageId)`, before returning.
+
+Rejections:
+
+- A relay-sourced message that fails permanently (any pipeline error) is quarantined under
+  its envelope fingerprint ([04-messages.md](./04-messages.md) § Envelope Fingerprint), so a
+  forged sender or message ID cannot poison an authentic delivery. If the failure came
+  after step 4 of the pipeline, the seen-store commit is persisted too.
+- A replay is a duplicate: nothing is written.
+- A direct-sourced message is unauthenticated until verified; its rejections are not
+  persisted. Direct delivery additionally requires `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`.
+- A local failure (storage, unavailable key hardware) is retryable: the tentative replay
+  state is discarded, including horizons.
+
+The relay cursor advances past delivered, duplicate and quarantined entries, and stops
+before the first retryable one.
+
+### Sender
+
+Persist a pending signed envelope together with its resulting thread state before
+sending it. Uncertain network outcomes retry the same envelope and message ID;
+a retry MUST NOT advance the thread twice. Clear the pending envelope only after
+acknowledgement, or when a later inbound message on the thread proves delivery. A pending
+envelope that the relay rejects as expired (`envelope_expired`) MAY be re-signed with the
+same `messageId` and a fresh timestamp; the thread entry it produced is rebuilt with the new
+timestamp.
 
 ## Signature Verification
 
@@ -144,16 +203,16 @@ Signatures are verified BEFORE decryption. This means:
 
 Receivers MUST support all signing schemes declared in the protocol's signing scheme registry. When verifying:
 
-1. Read `signature.scheme` from the envelope
-2. Load the sender's signing public key (from cached registration file)
-3. Dispatch to the appropriate verification algorithm
+1. Require `signature.scheme` to equal the sender's registered scheme
+2. Load the sender's signing public key from the verified peer binding
+3. Dispatch to the scheme's strict verification ([ed25519](./signing-schemes/ed25519.md), [secp256k1](./signing-schemes/secp256k1.md))
 4. Use constant-time comparison for all cryptographic operations
 
 ### Address Normalization
 
 | Scheme | Normalization |
 |--------|--------------|
-| `secp256k1` | Lowercase hex with `0x` prefix |
+| `secp256k1` | Lowercase hex with `0x` prefix; compared case-insensitively |
 | `ed25519` | Base58 as-is (case-sensitive) |
 
 ## Memory Safety
@@ -167,11 +226,7 @@ Implementations SHOULD:
 
 ## Peer Key Caching
 
-Agent registration files (containing X-Wing public keys) MAY be cached:
-
-- **TTL:** 24 hours recommended
-- **Storage:** Per-peer cache file with appropriate permissions
-- **Invalidation:** When a peer's registration file changes (detected on next fetch), invalidate cache immediately
+Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) § Rollback Barrier. The 24-hour TTL triggers a refresh only; it never removes a pin.
 
 ## Threat Model
 
@@ -181,13 +236,18 @@ Agent registration files (containing X-Wing public keys) MAY be cached:
 |--------|-----------|
 | Eavesdropping, including recorded traffic against future quantum computers | E2E encryption (X-Wing hybrid KEM + AES-256-GCM) |
 | Message tampering | Signature verification |
-| Replay attacks | messageId dedup + timestamp freshness |
-| Message transplant | conversationId as AAD in encryption |
-| Impersonation | Signature tied to registered signing key |
+| Replay attacks | messageId dedup + timestamp freshness + seen-store horizons |
+| Seen-store flooding by one sender | Per-sender quota and per-sender horizons |
+| Message transplant | conversationId as AAD in encryption, recomputed from verified keys |
+| Impersonation | Signature tied to registered signing key; `from` and scheme bound to the verified peer |
+| Encryption-key rollback | Rollback barrier on signed `registeredAt` |
 | Sender state compromise | Nothing recoverable: encapsulation randomness and shared secrets are destroyed after use |
 | State-skipping (e.g., invoice without accept) | Mandatory state machine per (conversationId, threadId) |
+| Role confusion (e.g., seller sends `accept`) | Sender roles in the transition table |
+| Third-party injection into a thread | Parties fixed by the first message |
 | Double-spend (duplicate receipt) | State machine rejects repeated transitions |
-| Cross-conversation thread hijack | Signed `threadId` + reference checks scoped to `(conversationId, threadId)` |
+| Cross-conversation thread hijack | Signed `threadId` + reference positions scoped to `(conversationId, threadId)` |
+| Resource exhaustion by oversized input | 04-messages.md § Size Limits |
 
 ### Out of Scope
 
@@ -195,7 +255,7 @@ Agent registration files (containing X-Wing public keys) MAY be cached:
 |--------|-------|
 | Endpoint availability (DDoS) | Transport-level concern, not protocol-level |
 | Malicious agent behavior | Handled by reputation (ERC-8004) and settlement mechanisms |
-| Recipient encryption key compromise | Exposes all messages to that key, past and future, until rotated via registration file update (or on-chain). No ratchet in ACE 1.0. |
+| Recipient encryption key compromise | Exposes all messages to that key, past and future, until rotated via a new binding. No ratchet in ACE 1.0. |
 | Quantum forgery of classical signatures | Not retroactive; see § Post-Quantum Posture |
 | Side-channel attacks on encryption | Implementation concern, not protocol-level |
 
@@ -211,14 +271,37 @@ Pure (non-hybrid) ML-KEM is deliberately not used: every production deployment o
 
 ## Implementation Checklist
 
-- [ ] Seen store with horizon `H`, persisted
-- [ ] Signature verification before decryption
+- [ ] Strict envelope decoding, body rules and size limits (04-messages.md)
+- [ ] Seen store with horizons, sender quota and canonical persistence
+- [ ] Signature verification before decryption, with strict scheme rules
 - [ ] Timestamp freshness enforcement
 - [ ] Schema validation on both send and receive
-- [ ] State machine enforcement for economic messages (send and receive sides)
-- [ ] State machine persistence for crash recovery
+- [ ] State machine with parties, roles and reference positions (send and receive sides)
+- [ ] Durable delivery in the normative commit order
 - [ ] X-Wing conformance against the draft test vectors (`test-vectors.json` → `xwing`)
 - [ ] Constant-time cryptographic comparisons
 - [ ] Secure key material handling (mlock, zeroing)
-- [ ] Peer key cache with TTL and invalidation
+- [ ] Peer binding cache with rollback barrier
 - [ ] File permissions (0600) for all sensitive data
+
+## Appendix A: SDK Persistence Formats (non-normative)
+
+The ACE SDKs persist pipeline state in a key-value store with these keys, so that other implementations can read and write the same files. Writers emit compact UTF-8 JSON with keys sorted ascending, non-ASCII unescaped and `/` unescaped. Readers accept any valid JSON. An unknown `version` is a storage error. `replay.json` contains only integers and ASCII strings, so its canonical form is byte-identical across implementations (`test-vectors.json` → `replay`).
+
+`sha256(a ‖ 0x00 ‖ b)` below is lowercase hex SHA-256 over the UTF-8 strings joined by one zero byte.
+
+| Key | Content |
+|-----|---------|
+| `replay.json` | `{"entries":[[messageId,from,timestamp],…],"horizon":H,"senderHorizons":{from:H[from]},"version":1}`; entries in seen-store order |
+| `cursors.json` | `{"cursors":{"<relay url, lowercase scheme and host, no trailing />":"<ms>-<seq>"},"version":1}` |
+| `threads/<sha256(conversationId ‖ 0x00 ‖ threadId)>.json` | `{"conversationId","history":[{"from","messageId","timestamp","type"}],"localAceId","peerAceId","pending":null\|PendingSend,"state","threadId","version":1}` |
+| `outbox/<sha256(requestId)>.json` | `{"message":Envelope,"requestId","stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends) |
+| `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","source":"relay"\|"direct","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
+| `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","source":"relay","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
+| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load |
+| `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}` |
+
+- `PendingSend` is `{"message":Envelope,"requestId","stagedAt","status"}`; inside a thread record it has no `version`. A thread has at most one pending send.
+- `ThreadSnapshot` is the thread record without `pending` and `version`.
+- Envelopes use the wire shape. Timestamps are Unix seconds.
+- A delivery record whose status is `acked` is deleted once its timestamp is covered by `H` or `H[from]`. Terminal threads with no pending send are deleted after the 30-day retention ([04-messages.md](./04-messages.md) § Implementation Requirements).

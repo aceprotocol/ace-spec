@@ -17,7 +17,7 @@ The same construction is used by Apple's CryptoKit post-quantum HPKE, XMTP, and 
 ### Sending a Message
 
 ```
-1. Fetch recipient's X-Wing public key pk_R (1216 bytes, from registration file, cached)
+1. Load recipient's X-Wing public key pk_R (1216 bytes, from the verified peer binding; see 02-discovery.md § Rollback Barrier)
 2. (ss, ct) = XWing.Encapsulate(pk_R)
      ss: 32-byte shared secret
      ct: 1120-byte KEM ciphertext
@@ -50,7 +50,7 @@ The same construction is used by Apple's CryptoKit post-quantum HPKE, XMTP, and 
 6. AES-256-GCM open(aesKey, nonce, ciphertext, tag, aad = UTF-8(conversationId)) → plaintext
 ```
 
-ML-KEM uses implicit rejection and X-Wing hashes the X25519 component into the shared secret, so a tampered `kemCiphertext` normally surfaces as an AES-GCM tag failure in step 6. X25519 libraries additionally refuse an all-zero DH output, so a `ct_X` that is a low-order point makes decapsulation itself fail; either way the message is rejected. In practice neither is reached: `kemCiphertext` is part of the signed message payload (see [04-messages.md](./04-messages.md)), so tampering fails signature verification first.
+ML-KEM uses implicit rejection and X-Wing hashes the X25519 component into the shared secret, so a tampered `kemCiphertext` normally surfaces as an AES-GCM tag failure in step 6. X25519 libraries additionally refuse an all-zero DH output, so a `ct_X` that is a low-order point makes decapsulation itself fail; either way the message is rejected. Decapsulation failure and AEAD failure are both reported as a permanent decryption failure. In practice neither is reached: `kemCiphertext` is part of the signed message payload (see [04-messages.md](./04-messages.md)), so tampering fails signature verification first.
 
 ## X-Wing Summary
 
@@ -67,7 +67,7 @@ Normative reference: `draft-connolly-cfrg-xwing-kem` (version 11 or later; the c
 
 Because `pk_X` and `ct_X` are hashed into the shared secret, no separate X25519 small-order or all-zero checks are needed. Implementations MUST NOT add them (they would only create cross-implementation divergence).
 
-Conformance: an implementation MUST reproduce the test vectors in the X-Wing draft. The ACE cross-language vectors (`test-vectors.json`) embed draft test vector 1 under the `xwing` key.
+Conformance: an implementation MUST reproduce all three X-Wing draft test vectors (key generation from seed and decapsulation). `test-vectors.json` → `xwing` holds vectors 1–3.
 
 ## Conversation ID
 
@@ -108,7 +108,7 @@ Implementations MUST precompute `ACE_KEM_SALT`. The salt input string is part of
 | Sender's state (after sending) | None. Encapsulation randomness and the shared secret are destroyed after use; nothing on the sender side can re-derive a past message key. |
 | Recipient's X-Wing private key | **All** messages ever sent to that key, past and future, until the key is rotated. |
 
-ACE does not include a ratchet or per-session ephemeral exchange. The second row is the reason a recipient key MUST be stored in hardware or derived from a hardware root where available, and why it SHOULD be rotated via the registration file when compromise is suspected (see [04-messages.md](./04-messages.md) § Key rotation).
+ACE does not include a ratchet or per-session key exchange. The second row is the reason a recipient key MUST be stored in hardware or derived from a hardware root where available, and why it SHOULD be rotated via the registration file when compromise is suspected (see [04-messages.md](./04-messages.md) § Key rotation).
 
 ### Post-quantum
 
@@ -122,7 +122,7 @@ Each agent has one long-lived X-Wing key pair:
 - The public key (1216 bytes) is published in the registration file as `signing.encryptionPublicKey`
 - The private key is a 32-byte seed used to decapsulate incoming messages
 
-The seed SHOULD be stored in, or deterministically derived from, hardware (Secure Enclave, TPM, HSM) when available. For software-only agents, the seed MUST be stored with appropriate file permissions (0600) and SHOULD be zeroed in memory after use. The expanded ML-KEM and X25519 private keys SHOULD be re-derived from the seed on use rather than persisted.
+The seed SHOULD be stored in, or deterministically derived from, hardware (Secure Enclave, TPM, HSM) when available. For software-only agents, the seed MUST be stored with appropriate file permissions (0600) and SHOULD be zeroed in memory after use. Implementations MAY cache the expanded ML-KEM and X25519 private keys in process memory for the lifetime of the identity object. They MUST NOT persist them.
 
 ### Encapsulation Randomness
 
@@ -141,7 +141,7 @@ The encrypted payload is transmitted as part of the message envelope:
 }
 ```
 
-Receivers MUST reject the message if `kemCiphertext` does not decode to exactly 1120 bytes or `payload` is shorter than 28 bytes. The maximum `payload` length is 10 MiB.
+Both fields are canonical Base64. Receivers MUST reject the message unless `kemCiphertext` decodes to exactly 1120 bytes and `payload` decodes to between 28 and `MAX_PAYLOAD_BYTES` (65536) bytes inclusive. Senders MUST NOT encrypt a body larger than `MAX_PLAINTEXT_BYTES` (65508). See [04-messages.md](./04-messages.md) § Size Limits and § Envelope Decoding.
 
 ## Implementation Notes
 

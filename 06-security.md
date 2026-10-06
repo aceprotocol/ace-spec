@@ -22,6 +22,13 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
 3. Replay Detection (atomic check-and-reserve)
    → Atomically: if messageId seen → reject; else reserve messageId
    → Reservation prevents concurrent duplicates before full processing
+   → If the message fails BEFORE step 4 succeeds (malformed encoding, wrong
+     lengths, bad signature), release the reservation: unauthenticated input
+     MUST NOT be able to burn a messageId
+   → Once the signature has verified, the reservation is kept on ANY later
+     failure (decryption, body schema, state machine): an authentic message is
+     processed at most once regardless of outcome, so a captured message that
+     was rejected cannot be replayed later when the state would allow it
 
 4. Signature Verification (BEFORE decryption)
    → Verify signature.scheme is supported

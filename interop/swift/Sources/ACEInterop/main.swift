@@ -18,6 +18,7 @@ func url(_ p: String) -> URL { W.appendingPathComponent(p) }
 func parseJSON(_ d: Data) throws -> Any { try JSONSerialization.jsonObject(with: d, options: [.fragmentsAllowed]) }
 func rd(_ p: String) throws -> [String: Any] { try parseJSON(Data(contentsOf: url(p))) as! [String: Any] }
 func rdAny(_ p: String) throws -> Any { try parseJSON(Data(contentsOf: url(p))) }
+func anyJSON(_ o: [String: JSONValue]) throws -> Any { try parseJSON(JSONValue.object(o).jsonData()) }
 func data(_ v: Any) throws -> Data { try JSONSerialization.data(withJSONObject: v, options: [.sortedKeys, .withoutEscapingSlashes]) }
 func wr(_ p: String, _ v: Any) throws {
     let u = url(p)
@@ -41,7 +42,7 @@ func attempt(_ fn: () throws -> [String: Any]) -> [String: Any] {
 func attemptAsync(_ fn: () async throws -> [String: Any]) async -> [String: Any] {
     do { return try await fn().merging(["ok": true]) { a, _ in a } } catch { return fail(error) }
 }
-func obj(_ s: String) -> JSONObject { try! JSONSerialization.jsonObject(with: Data(s.utf8)) as! JSONObject }
+func obj(_ s: String) -> [String: JSONValue] { try! JSONValue(json: Data(s.utf8)).objectValue! }
 
 // MARK: - Fixtures (same values in every language)
 
@@ -56,11 +57,11 @@ func profile(_ lang: String) -> AgentProfile {
                  capabilities: ["translate"], endpoint: "https://\(lang).example/ace",
                  pricing: ProfilePricing(currency: "USDC", maxAmount: "10"))
 }
-func textBody(_ s: String, _ r: String, _ sch: String) -> JSONObject {
+func textBody(_ s: String, _ r: String, _ sch: String) -> [String: JSONValue] {
     ["message": "hello \(s)→\(r) (\(sch)) héllo 世界 / \"q\" \\ ✓"]
 }
-nonisolated(unsafe) let RFQ = obj(#"{"need":"Translate 500 words EN→FR","maxPrice":"10.50","currency":"USDC","ttl":3600}"#)
-nonisolated(unsafe) let OFFER = obj(#"{"price":"9.75","currency":"USDC","terms":"delivery in 24h / net","ttl":600}"#)
+let RFQ = obj(#"{"need":"Translate 500 words EN→FR","maxPrice":"10.50","currency":"USDC","ttl":3600}"#)
+let OFFER = obj(#"{"price":"9.75","currency":"USDC","terms":"delivery in 24h / net","ttl":600}"#)
 
 // `<lang>-<scheme>` sends; a second identity `<lang>-<scheme>-rx` receives (so swift→swift uses two parties).
 func idFile(_ lang: String, _ s: SigningScheme, rx: Bool = false) throws -> [String: Any] {
@@ -78,7 +79,7 @@ func envelope(_ v: Any) throws -> ACEMessage { try decodeEnvelope(data(v)) }
 func summary(_ p: ParsedMessage) throws -> [String: Any] {
     ["messageId": p.messageId, "from": p.from, "to": p.to, "conversationId": p.conversationId,
      "type": p.type.rawValue, "threadId": p.threadId as Any? ?? NSNull(), "timestamp": p.timestamp,
-     "body": try parseJSON(data(p.body))]
+     "body": try parseJSON(JSONValue.object(p.body).jsonData())]
 }
 func peerSummary(_ p: VerifiedPeer) -> [String: Any] {
     ["aceId": p.aceId, "scheme": p.scheme.rawValue, "signingPublicKey": b64(p.signingPublicKey),
@@ -175,7 +176,7 @@ func send1() throws {
                 let tb = textBody(LANG, R, s.rawValue)
                 let text = try createMessage(sender: me, recipient: peer, type: .text, body: tb, threads: threads)
                 let rfq = try createMessage(sender: me, recipient: peer, type: .rfq, body: RFQ, threads: threads, threadId: threadId)
-                try wr("msgs/m1/\(key).json", ["threadId": threadId, "textBody": tb, "rfqBody": RFQ,
+                try wr("msgs/m1/\(key).json", ["threadId": threadId, "textBody": try anyJSON(tb), "rfqBody": try anyJSON(RFQ),
                                                "text": try parseJSON(text.jsonData()), "rfq": try parseJSON(rfq.jsonData())])
                 try wr("priv/\(LANG)/threads-\(R)-\(s.rawValue).json", try encodable(threads.exportState()))
             } catch {
@@ -213,7 +214,7 @@ func recv1() throws {
                 r["reply"] = attempt {
                     let offer = try createMessage(sender: me, recipient: peer, type: .offer, body: OFFER, threads: threads, threadId: threadId)
                     try wr("msgs/m2/\(LANG)-\(S)-\(s.rawValue).json",
-                           ["threadId": threadId, "offerBody": OFFER, "offer": try parseJSON(offer.jsonData())])
+                           ["threadId": threadId, "offerBody": try anyJSON(OFFER), "offer": try parseJSON(offer.jsonData())])
                     return [:]
                 }
                 r["stateAfterOffer"] = threads.getState(conversationId: conv, threadId: threadId).rawValue

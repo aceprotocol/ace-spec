@@ -19,7 +19,7 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
 2. Timestamp Freshness (BEFORE expensive operations)
    → Reject unless floor <= timestamp <= now + 5 minutes
      (floor: see § Replay Protection)
-   → Reject if timestamp <= H (the seen store's horizon)
+   → Reject if timestamp <= H or timestamp <= H[from] (the seen store's horizons)
 
 3. Replay Check
    → Reject if messageId is in the seen store
@@ -29,7 +29,7 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
    → Verify signature against sender's public key
    → Reconstruct signData and compare
    → Then atomically: if messageId is in the seen store → reject; else insert
-     (messageId, timestamp). Nothing enters the store before its signature
+     (messageId, from, timestamp). Nothing enters the store before its signature
      verifies, and an entry is never removed on a later failure (decryption,
      body schema, state machine): an authentic message is processed at most
      once regardless of outcome
@@ -65,16 +65,21 @@ pass step 2.
 
 ### Seen Message Store
 
-The seen store holds entries `(messageId, timestamp)`, where `timestamp` is the
-message's signed envelope timestamp, and a horizon `H`. Step 2 rejects every
-message with `timestamp <= H`, so removing an entry is safe once `H` covers it:
+The seen store holds entries `(messageId, from, timestamp)`, where `from` and
+`timestamp` are the message's signed sender and envelope timestamp, a horizon
+`H`, and per-sender horizons `H[from]`. Step 2 rejects every message with
+`timestamp <= H` or `timestamp <= H[from]`, so removing an entry is safe once a
+horizon covers it:
 
-- **Removal:** only the entry with the smallest `timestamp` may be removed, and
-  `H` is set to that `timestamp`. Remove when the store is at capacity, or when
-  the entry's `timestamp` is below the floor.
-- **New store:** `H = now - 5 minutes`.
+- **Removal:** only the entry with the smallest `timestamp` may be removed.
+  When its `timestamp` is below the floor, raise `H` to it. When the store is
+  over capacity, raise only `H[from]` of that entry's sender to it: a sender
+  flooding the store then delays only its own messages, never anyone else's.
+- **Sender horizons:** at most `capacity` are kept. Drop any `H[from] <= H`;
+  if still over, fold the lowest into `H` (raise `H` to them and drop them).
+- **New store:** `H = now - 5 minutes`, no sender horizons.
 - **Capacity:** Minimum 100,000 entries
-- **Persistence:** Entries and `H` are persisted together. Economic messages
+- **Persistence:** Entries, `H` and the sender horizons are persisted together. Economic messages
   MUST be persisted before they are acted on; system/social messages MAY be
   batch-persisted.
 - **Storage:** File-based (e.g., `~/.ace/seen_messages.json`) or database,
@@ -85,7 +90,10 @@ message with `timestamp <= H`, so removing an entry is safe once `H` covers it:
 The floor is `now - 5 minutes`. A receiver collecting messages queued while it
 was offline MAY set a fixed earlier floor. Nothing else changes: entries removed
 while the backlog is processed raise `H`, so a redelivered message is rejected
-at step 2.
+at step 2. Use that floor for every message, live ones included, until the
+backlog is done: a live message processed with the default floor removes the
+backlog entries below it and raises `H` past any backlog message not yet
+processed.
 
 ### Timestamp Freshness
 

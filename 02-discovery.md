@@ -72,7 +72,7 @@ Only `replace` appends these ten fields, in order:
 4. `present` if pricing exists, otherwise `absent`; then `pricing.currency` and `pricing.maxAmount` (missing strings become empty).
 
 All fields use the existing four-byte big-endian length prefix; there is no JSON
-serialization dependency. Unknown profile fields are not stored. Implementations
+serialization dependency. Unknown top-level profile fields are ignored and not stored. `pricing` may contain only `currency` and `maxAmount`; any other `pricing` field makes the profile invalid (`invalid_profile`), because the registration authorization covers only those two. Implementations
 SHOULD use the SDK registration builder instead of implementing this encoding.
 
 A relay MUST validate both signatures and the full profile before writing. Identity,

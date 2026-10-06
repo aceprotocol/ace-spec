@@ -52,7 +52,7 @@ The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-
 
 An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`).
 
-`POST /v1/unregister` removes the identity and profile and closes the caller's listen streams. Its auth timestamp MUST be newer than the stored registration timestamp, else 409 `identity_conflict`. The relay retains it as a timestamp barrier so an older registration request cannot resurrect the identity.
+`POST /v1/unregister` removes the identity and profile and closes the caller's listen streams. Its auth timestamp MUST be strictly greater than the stored registration timestamp, else 409 `identity_conflict`. The relay retains it as a timestamp barrier so an older registration request cannot resurrect the identity.
 
 ## Send
 
@@ -63,7 +63,7 @@ An older timestamp, or an equal timestamp with a different mutation, is rejected
 3. Verifies the signature against the stored identity of `from`, whose scheme MUST equal `signature.scheme` (`invalid_signature`).
 4. If an envelope with the same `(from, messageId)` is already stored: returns `{"ok":true}` if it is the same envelope (same fingerprint), even when it is now stale; otherwise 409 `message_id_conflict`.
 5. Rejects `|now - timestamp| > TIMESTAMP_WINDOW_SECONDS` with 400 `envelope_expired`.
-6. Enqueues it for `to`, subject to the recipient's queue bound (`recipient_inbox_full`) and a per-(sender, recipient) quota (`sender_quota_exceeded`). Queued messages expire after the relay's message TTL, which MUST NOT exceed `OFFLINE_WINDOW_SECONDS`. A full queue rejects new messages; it never evicts queued ones.
+6. Enqueues it for `to`, subject to the recipient's queue bound (`recipient_inbox_full`) and a per-(sender, recipient) quota (`sender_quota_exceeded`), counted over a fixed window of one message TTL starting at the pair's first enqueue. Queued messages expire after the relay's message TTL, which MUST NOT exceed `OFFLINE_WINDOW_SECONDS`. A full queue rejects new messages; it never evicts queued ones.
 
 A sender that receives `envelope_expired` MAY re-sign the same message with a fresh timestamp ([06-security.md](./06-security.md) § Sender).
 
@@ -71,7 +71,7 @@ A sender that receives `envelope_expired` MAY re-sign the same message with a fr
 
 `GET /v1/inbox?since&limit` returns queued messages for the caller in stream order.
 
-- `since` is a stream ID `^\d+-\d+$` (`<ms>-<seq>`). Absent means `-` (from the start). Entries strictly after `since` are returned.
+- `since` is a stream ID `^\d+-\d+$` (`<ms>-<seq>`) or the literal `-`. Absent means `-` (from the start). Entries strictly after `since` are returned.
 - `limit` is a wire integer in `1..MAX_INBOX_PAGE`; default `MAX_INBOX_PAGE`.
 - The signed payload uses `since` (or `-`) and `decimal(limit)` of the effective limit.
 - `cursor` is the stream ID of the last returned entry, or `null` when none was returned.
@@ -117,7 +117,7 @@ Error responses have the body `{"error": <code>, "message"?: string}`.
 | `replay` | 409 | Repeated `(action, aceId, signature)` |
 | `identity_conflict` | 409 | Registration older than, or conflicting with, the stored one |
 | `message_id_conflict` | 409 | Different envelope already stored under `(from, messageId)` |
-| `rate_limited` | 429 | Rate limit; `Retry-After` header gives seconds |
+| `rate_limited` | 429 | Rate limit or listen-connection cap; `Retry-After` header gives seconds |
 | `recipient_inbox_full` | 429 | Recipient queue at its bound |
 | `sender_quota_exceeded` | 429 | Per-(sender, recipient) quota reached |
 | `max_open_intents` | 429 | Open intent limit reached |
@@ -128,3 +128,9 @@ Error responses have the body `{"error": <code>, "message"?: string}`.
 - Message TTL: at most `OFFLINE_WINDOW_SECONDS`. A relay MUST refuse to start with a larger configured TTL.
 - `GET /v1/inbox` `limit`: at most `MAX_INBOX_PAGE`.
 - SSE `data` line: at most `MAX_ENVELOPE_BYTES`.
+
+## Additional Rules
+
+- A request body that is not valid JSON, has the wrong content type, or exceeds the body limit is rejected with 400 `invalid_argument`.
+- SDK-only decode errors map onto the table: `unsupported_version` → `invalid_envelope`, `scheme_mismatch` → `invalid_signature`.
+- A relay stores and forwards only the envelope fields defined in [04-messages.md](./04-messages.md). Unknown envelope fields are dropped: they are covered by neither the signature nor the fingerprint.

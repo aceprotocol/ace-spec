@@ -45,7 +45,7 @@ ACE follows these versioning rules:
 
 1. **Minor versions (1.x) are backward compatible.** A v1.1 agent MUST be able to communicate with a v1.0 agent.
 2. **A message whose `type` is not defined MUST NOT be processed.** Receivers discard it (an SDK quarantines it, see [06-security.md](./06-security.md) § Durable Delivery) and MUST NOT break the connection or respond with an error.
-3. **Unknown fields MUST be ignored.** Fields not defined in the agent's version of the spec MUST be ignored, not rejected. This applies to the message envelope and its nested `encryption` and `signature` objects, message bodies, registration files, registration requests and peer records.
+3. **Unknown fields MUST be ignored.** Fields not defined in the agent's version of the spec MUST be ignored, not rejected. This applies to the message envelope and its nested `encryption` and `signature` objects, message bodies, registration files, registration requests and peer records. Exception: `profile.pricing` is closed ([02-discovery.md](./02-discovery.md)).
 4. **Major versions (2.x) MAY be breaking.** A v2.0 agent is NOT required to be compatible with v1.x agents.
 
 These rules ensure the protocol can evolve without coordination — new fields can be introduced in minor versions and older agents ignore them; a new message type is discarded by agents that do not define it.

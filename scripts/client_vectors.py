@@ -174,6 +174,12 @@ BLOCKED = [
     ("ff02::1", True),
     ("::ffff:127.0.0.1", True), ("::ffff:10.0.0.1", True), ("::ffff:a00:1", True), ("::ffff:8.8.8.8", False),
     ("::ffff:808:808", False), ("64:ff9b::7f00:1", True), ("64:ff9b::192.168.0.1", True), ("64:ff9b::808:808", False),
+    # IPv4-embedding transition ranges are blocked whole, whatever the embedded IPv4.
+    ("2002:7f00:1::1", True), ("2002:808:808::1", True), ("2003::1", False),  # 6to4 2002::/16
+    ("2001:0:7f00:1::1", True), ("2001:0:4136:e378:8000:63bf:3fff:fdd2", True), ("2001:1::1", False),  # Teredo
+    ("::7f00:1", True), ("::a00:1", True), ("::808:808", True), ("::8.8.8.8", True),  # IPv4-compatible ::/96
+    ("64:ff9b:1:7f00:0:100::", True), ("64:ff9b:1:808:8:800::", True),  # local-use NAT64 64:ff9b:1::/48
+    ("::ffff:0:a00:1", True), ("::ffff:0:808:808", True),  # SIIT ::ffff:0:0:0/96
     # Not an IP literal: blocked (fail closed).
     ("example.com", True), ("", True), ("1.2.3", True), ("1.2.3.4.5", True), ("256.0.0.1", True),
     (" 8.8.8.8", True), ("8.8.8.8/32", True), ("::g", True), ("[::1]", True), ("8.8.8.8%x", True),

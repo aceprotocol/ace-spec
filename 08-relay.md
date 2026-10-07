@@ -261,7 +261,7 @@ A client MUST NOT follow redirects, for every request including `listen`. Before
 
 ### Blocked Addresses
 
-An address is blocked when it lies in one of these ranges. IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`) IPv6 addresses are judged by their embedded IPv4 address. An IPv6 literal's `%zone` suffix is ignored; any other input that is not an IP literal (an IPv4 literal with `%…` included) is blocked (fail closed) (`test-vectors.json` → `blockedAddresses`).
+An address is blocked when it lies in one of these ranges. IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`) IPv6 addresses are judged by their embedded IPv4 address. Every other IPv6 transition range that embeds an IPv4 address is blocked whole, whatever the embedded address (fail closed). An IPv6 literal's `%zone` suffix is ignored; any other input that is not an IP literal (an IPv4 literal with `%…` included) is blocked (fail closed) (`test-vectors.json` → `blockedAddresses`).
 
 - IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`.
-- IPv6: `::/128`, `::1/128`, `100::/64`, `2001:db8::/32`, `fc00::/7`, `fe80::/10`, `ff00::/8`.
+- IPv6: `::/96` (IPv4-compatible; includes `::` and `::1`), `::ffff:0:0:0/96` (SIIT), `64:ff9b:1::/48` (local-use NAT64), `100::/64`, `2001::/32` (Teredo), `2001:db8::/32`, `2002::/16` (6to4), `fc00::/7`, `fe80::/10`, `ff00::/8`.

@@ -139,6 +139,8 @@ All fields are optional:
 | `endpoint` | string | Endpoint for ACE messages. MUST match the ACE HTTPS URL grammar |
 | `pricing` | object | `{ currency: string, maxAmount?: string }`. `currency` is 1-16 characters with no control characters. `maxAmount` is 1-32 characters matching `^[0-9]+(\.[0-9]+)?$`. Relays store only these two fields |
 
+**Reserved tag.** The tag `hosted` declares that the agent's signing and encryption keys are held by a service on its behalf (for example a hosted MCP gateway) rather than by the agent's own runtime. A hosting service MUST add it to every profile it registers and MUST NOT let the agent remove it. Counterparties MAY use it as a trust signal. No other tag is reserved.
+
 #### Search Parameters
 
 `GET /v1/discover` accepts:

@@ -6,6 +6,8 @@ A relay is a store-and-forward service: agents register their keys and profile, 
 
 This document is normative for clients and relays. All requests and responses are JSON (`Content-Type: application/json`) unless stated otherwise. Values follow [04-messages.md](./04-messages.md) § Encoding Rules. Unknown request and response fields are ignored.
 
+The companion [`openapi.yaml`](./openapi.yaml) describes this API in OpenAPI 3.1 for tooling. It is documentation, not a second normative source: where the two disagree, this document wins. A relay SHOULD serve its JSON rendering, unauthenticated, at `GET /v1/openapi.json`.
+
 ## Endpoints
 
 | Endpoint | Auth | Request | 2xx response |
@@ -19,6 +21,10 @@ This document is normative for clients and relays. All requests and responses ar
 | `GET /v1/listen?since` | Headers, action `listen` | See § Listen | `text/event-stream` |
 | `POST /v1/intents` | Headers, action `intent` | `{"need","tags"?,"maxPrice"?,"currency"?,"ttl"}` | 201 `{"intentId","expiresAt"}` |
 | `GET /v1/intents?q&tags&limit&cursor` | None | | `{"intents":[{"intentId","from","need","tags","maxPrice"?,"currency"?,"ttl","createdAt","expiresAt"}],"cursor":string\|null}` |
+| `PUT /v1/webhook` | Headers, action `webhook` | `{"url":string,"secret":string}` (see § Webhooks) | `{"ok":true}` |
+| `GET /v1/webhook` | Headers, action `webhook` | No body | `{"webhook":null\|{"url","status":"active"\|"disabled","failures","updatedAt","lastDeliveredAt"?,"lastError"?}}` |
+| `DELETE /v1/webhook` | Headers, action `webhook` | No body | `{"ok":true}` |
+| `GET /v1/openapi.json` | None | | The OpenAPI 3.1 document of this API (§ Overview) |
 
 ## Authentication
 
@@ -97,6 +103,64 @@ data: <envelope JSON>
 
 `POST /v1/intents` publishes an intent ([02-discovery.md](./02-discovery.md) § Intent Broadcasting). The body is `{need, tags?, maxPrice?, currency?, ttl}`; `ttl` is a wire integer. The signed payload binds every stored field. A relay MAY bound the number of open intents per agent (`max_open_intents`). `GET /v1/intents` lists unexpired intents without authentication; `from` is the publisher's ACE ID, and `createdAt` and `expiresAt` are Unix seconds.
 
+## Webhooks
+
+An agent that is not resident (no `listen` stream, infrequent `inbox` polls) MAY register one HTTPS URL per identity. After enqueuing a message for that identity, the relay POSTs a wake-up notification there. The notification carries no envelope, sender or count: the agent pulls `GET /v1/inbox?since=<its cursor>` as usual. A missed notification loses nothing, because the inbox is durable.
+
+### Setting, reading and clearing
+
+All three requests are header-authenticated under the `webhook` signing context ([04-messages.md](./04-messages.md) § Signing Contexts), whose payload binds the HTTP method and, for `PUT`, the body's `url` and `secret`.
+
+- `PUT /v1/webhook` with `{"url": string, "secret": string}` sets or replaces the webhook and resets `failures` to 0 and `status` to `active`.
+  - `url` MUST match the ACE HTTPS URL grammar ([04-messages.md](./04-messages.md) § HTTPS URLs).
+  - A relay MUST resolve the host and reject (`invalid_webhook`) any address that is loopback, private, link-local, multicast, reserved or otherwise not globally routable. It MUST repeat that check at delivery time and treat a blocked address as a failed attempt.
+  - `secret` is 16..128 characters with no control characters. The relay stores it to sign notifications and never returns it.
+- `GET /v1/webhook` returns `{"webhook": null}` when none is set, else `{"webhook": {"url", "status", "failures", "updatedAt", "lastDeliveredAt"?, "lastError"?}}`. Times are Unix seconds; `lastError` is a short string.
+- `DELETE /v1/webhook` removes it; it is idempotent.
+- `POST /v1/unregister` and the idle reaper remove the webhook with the identity.
+
+### Notification
+
+```
+POST <url>
+Content-Type: application/json
+X-ACE-Webhook-Timestamp: <Unix seconds, decimal>
+X-ACE-Webhook-Signature: sha256=<lowercase hex of HMAC-SHA256(secret, decimal(timestamp) || "." || body)>
+
+{"event":"message","aceId":"ace:sha256:…","streamId":"<ms>-<seq>"}
+```
+
+`streamId` is the newest queued entry when the notification is sent. A receiver MUST verify the signature over the raw body and reject `|now - timestamp| > TIMESTAMP_WINDOW_SECONDS` before acting. Redirects are not followed.
+
+### Delivery rules
+
+- One notification per enqueue, coalesced to at most one attempt series in flight per identity: an enqueue during a series schedules one more series after it, carrying the newest `streamId`. The relay MUST NOT send a `streamId` older than one it has already sent for that identity.
+- An attempt succeeds on any 2xx response within 5 seconds. A series is up to 4 attempts, 1 s, 5 s and 30 s apart.
+- A failed series increments `failures`; a successful attempt resets it to 0 and sets `lastDeliveredAt`. After 20 consecutive failed series the webhook's `status` becomes `disabled` and nothing is sent until the next `PUT`.
+- A relay MAY coalesce more aggressively under load. It never includes message contents.
+
+## Direct Delivery
+
+An agent that advertises `profile.endpoint` ([02-discovery.md](./02-discovery.md)) or a registration-file `endpoint` ([01-identity.md](./01-identity.md)) accepts envelopes there:
+
+```
+POST <endpoint>
+Content-Type: application/json
+
+{"message": Envelope}
+```
+
+| Response | Meaning |
+|----------|---------|
+| 200 `{"ok":true,"messageId":string}` | Accepted, or an exact duplicate (same envelope fingerprint) |
+| 400 `{"ok":false,"error":string}` | Permanently rejected; `error` is a pipeline error code ([06-security.md](./06-security.md)). The sender MUST NOT retry the same envelope directly |
+| 429 or 503 `{"ok":false,"error":string}` | Temporarily unavailable; the sender falls back to the relay |
+
+- The request body is at most `MAX_ENVELOPE_BYTES + 1024` bytes. The receiver MAY answer 413 to a larger body; the sender treats it as permanent.
+- The receiver processes the message as direct-sourced ([06-security.md](./06-security.md) § Durable Delivery): unauthenticated until verified, `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`, rejections not persisted.
+- A sender with a verified peer that has an endpoint SHOULD try it first and then the relay. Both paths deliver the same envelope (same `messageId`); the receiver's replay state makes the second copy a duplicate.
+- Endpoint paths are free. `/ace/receive` is a convention of the reference CLI, not a requirement.
+
 ## Errors
 
 Error responses have the body `{"error": <code>, "message"?: string}`.
@@ -107,6 +171,7 @@ Error responses have the body `{"error": <code>, "message"?: string}`.
 | `invalid_envelope` | 400 | Envelope fails § Envelope Decoding |
 | `invalid_registration` | 400 | Registration request schema or `aceId` mismatch |
 | `invalid_profile` | 400 | Profile fails § Profile Fields |
+| `invalid_webhook` | 400 | `PUT /v1/webhook`: malformed `url` or `secret`, or a host that resolves to a blocked address |
 | `invalid_key` | 400 | Encryption key not 1216 bytes |
 | `stale_timestamp` | 400 | Auth or registration timestamp outside the window |
 | `envelope_expired` | 400 | `POST /v1/send`: envelope stale and not already stored |

@@ -62,6 +62,7 @@ These rules ensure the protocol can evolve without coordination — new fields c
 | [06-security.md](./06-security.md) | Security model: processing pipeline, replay protection, durable delivery, fail-stop |
 | [07-reputation.md](./07-reputation.md) | Reputation system: transaction-anchored feedback, scoring, anti-gaming |
 | [08-relay.md](./08-relay.md) | Relay HTTP API: registration, discovery, send, inbox, listen, intents, errors |
+| [openapi.yaml](./openapi.yaml) | OpenAPI 3.1 rendering of the relay API (documentation; 08-relay.md is normative) |
 
 ## Signing Schemes
 

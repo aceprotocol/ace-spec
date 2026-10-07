@@ -187,10 +187,12 @@ The complete list. A signature produced under one action MUST NOT verify under a
 | `inbox` | `GET /v1/inbox` | `encodePayload(sinceOrDash, decimal(limit))` |
 | `unregister` | `POST /v1/unregister` | Empty (0 bytes) |
 | `intent` | `POST /v1/intents` | `encodePayload(need, join(tags, ","), maxPriceOrEmpty, currencyOrEmpty, decimal(ttl))` |
+| `webhook` | `PUT` / `GET` / `DELETE /v1/webhook` ([08-relay.md](./08-relay.md) § Webhooks) | `encodePayload(method, urlOrEmpty, secretOrEmpty)` |
 
 - For `message`, `aceId` is `from` and `timestamp` is the envelope `timestamp`. `kemCiphertextBytes` and `payloadBytes` are the decoded bytes. `threadIdOrEmpty` is the empty string when `threadId` is absent.
 - For `register` and `register-request`, `aceId` and `timestamp` are the request's. `encryptionPublicKeyB64` and `signingPublicKeyB64` are the Base64 strings as sent.
-- For `listen`, `inbox`, `unregister` and `intent`, `aceId` and `timestamp` are the `X-ACE-Id` and `X-ACE-Timestamp` headers ([08-relay.md](./08-relay.md) § Authentication). `sinceOrDash` is the `since` value, or `-` when absent. `limit` is the effective limit. `tags` absent is the empty list.
+- For `listen`, `inbox`, `unregister`, `intent` and `webhook`, `aceId` and `timestamp` are the `X-ACE-Id` and `X-ACE-Timestamp` headers ([08-relay.md](./08-relay.md) § Authentication). `sinceOrDash` is the `since` value, or `-` when absent. `limit` is the effective limit. `tags` absent is the empty list.
+- For `webhook`, `aceId` and `timestamp` are the `X-ACE-Id` and `X-ACE-Timestamp` headers. `method` is the uppercase HTTP method as sent (`PUT`, `GET` or `DELETE`). For `GET` and `DELETE`, `urlOrEmpty` and `secretOrEmpty` are empty strings. For `PUT` they are the request body's `url` and `secret`.
 
 `threadId` is part of the signed message payload. Economic thread identity is security-relevant: changing `threadId` changes the signed meaning of the message and MUST invalidate the signature.
 

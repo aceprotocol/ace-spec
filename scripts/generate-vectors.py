@@ -47,7 +47,7 @@ from ace.discovery import adopt_decision
 from ace.encryption import ACE_KEM_SALT, compute_conversation_id
 from ace.messages import decode_body
 from ace.registration import registration_payload
-from ace.state_machine import THREAD_STATES, ThreadEvent
+from ace.state_machine import ThreadEvent
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.normpath(os.path.join(HERE, "..", "test-vectors.json"))
@@ -379,6 +379,8 @@ BODY_TEMPLATES = {
     "deliver": {"type": "inline", "content": "x"},
     "confirm": {"deliverId": "$head"},
 }
+# SDK no longer exports THREAD_STATES; keep the vector ordering here.
+THREAD_STATES = ("idle", "rfq", "offered", "accepted", "rejected", "invoiced", "paid", "delivered", "confirmed")
 PATHS = {
     "idle": [],
     "rfq": ["rfq:buyer"],
@@ -714,6 +716,10 @@ AUTH_REQUESTS = [
      RelayAuthRequest.intent("translate EN to FR", ["nlp", "fr"], "10", "USDC", 3600)),
     ({"action": "intent", "need": "anything", "tags": [], "maxPrice": None, "currency": None, "ttl": 60},
      RelayAuthRequest.intent("anything", [], None, None, 60)),
+    ({"action": "webhook", "method": "PUT", "url": "https://agent.example.com/ace/wake", "secret": "0123456789abcdef0123456789abcdef"},
+     RelayAuthRequest.webhook("PUT", "https://agent.example.com/ace/wake", "0123456789abcdef0123456789abcdef")),
+    ({"action": "webhook", "method": "GET", "url": "", "secret": ""}, RelayAuthRequest.webhook("GET")),
+    ({"action": "webhook", "method": "DELETE", "url": "", "secret": ""}, RelayAuthRequest.webhook("DELETE")),
 ]
 auth_vectors = []
 for agent_name, ident in (("alice", alice), ("bob", bob)):
@@ -929,7 +935,7 @@ peer_binding = [
 # =====================================================================================
 
 vectors = {
-    "version": "2",
+    "version": "3",
     "agents": {"alice": agent_json(alice), "bob": agent_json(bob)},
     "xwing": XWING_VECTORS,
     "vectors": {

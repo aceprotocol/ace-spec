@@ -48,7 +48,7 @@ Normative constants. Every implementation and every relay uses these values.
 |------|-------|---------|
 | `MAX_PLAINTEXT_BYTES` | 65508 | UTF-8 body JSON before encryption |
 | `MAX_PAYLOAD_BYTES` | 65536 | `nonce ‖ ciphertext ‖ tag` (decoded `encryption.payload`) |
-| `MAX_ENVELOPE_BYTES` | 131072 | Serialized envelope; relay request body limit; SSE data limit |
+| `MAX_ENVELOPE_BYTES` | 131072 | Serialized envelope; SSE data limit |
 | `MAX_JSON_DEPTH` | 32 | Body nesting depth; the top-level object is depth 0 |
 | `MAX_THREAD_ID_LENGTH` | 256 | Code points |
 | `MAX_OPEN_THREADS_PER_PEER` | 1000 | non-terminal threads held per peer |
@@ -56,6 +56,7 @@ Normative constants. Every implementation and every relay uses these values.
 | `OFFLINE_WINDOW_SECONDS` | 604800 | Floor offset for a receiver collecting queued messages (`now - 7 days`); relay message TTL MUST NOT exceed this |
 | `MAX_REGISTRATION_FILE_BYTES` | 1048576 | Registration file |
 | `MAX_INBOX_PAGE` | 100 | Maximum `limit` of `GET /v1/inbox` |
+| `MAX_DIRECT_BODY_BYTES` | 132096 | `MAX_ENVELOPE_BYTES + 1024`; direct-delivery and relay request body ([08-relay.md](./08-relay.md) § Direct Delivery, § Limits) |
 
 `MAX_PLAINTEXT_BYTES + 28 = MAX_PAYLOAD_BYTES`. A sender MUST reject a body whose serialization exceeds `MAX_PLAINTEXT_BYTES` before encrypting. A transport MUST reject a serialized envelope larger than `MAX_ENVELOPE_BYTES` before parsing it.
 

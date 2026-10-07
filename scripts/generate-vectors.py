@@ -12,6 +12,7 @@ Runner rules shared by all SDKs are documented next to each section in
 
 from __future__ import annotations
 
+import argparse
 import base64
 import hashlib
 import json
@@ -26,6 +27,7 @@ from ace import (
     SoftwareIdentity,
     ThreadStateMachine,
     create_message,
+    create_registration_file,
     create_registration_request,
     decode_envelope,
     envelope_fingerprint,
@@ -50,8 +52,13 @@ from ace.messages import decode_body
 from ace.registration import registration_payload
 from ace.state_machine import ThreadEvent, ThreadState
 
+from client_vectors import client_vectors
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT = os.path.normpath(os.path.join(HERE, "..", "test-vectors.json"))
+_args = argparse.ArgumentParser(description="Generate ace-spec/test-vectors.json.")
+_args.add_argument("--out", default=os.path.normpath(os.path.join(HERE, "..", "test-vectors.json")),
+                   help="output path (default: ace-spec/test-vectors.json)")
+OUT = _args.parse_args().out
 ECONOMIC = ["rfq", "offer", "accept", "reject", "invoice", "receipt", "deliver", "confirm"]
 
 
@@ -141,7 +148,7 @@ def agent_json(ident: SoftwareIdentity) -> dict:
 
 
 # =====================================================================================
-# signData / signature (unchanged from v1)
+# signData / signature
 # =====================================================================================
 
 MESSAGE_ID = "550e8400-e29b-41d4-a716-446655440000"
@@ -156,8 +163,8 @@ alice_sig = alice.sign(sign_data)
 # encryptedMessage (random encapsulation) + self-check
 # =====================================================================================
 
-bob_peer = verify_registration_file(bob.to_registration_file(name="Bob", endpoint="https://bob.example/ace"), pinned_at=TIMESTAMP)
-alice_peer = verify_registration_file(alice.to_registration_file(name="Alice", endpoint="https://alice.example/ace"), pinned_at=TIMESTAMP)
+bob_peer = verify_registration_file(create_registration_file(bob, name="Bob", endpoint="https://bob.example/ace"), pinned_at=TIMESTAMP)
+alice_peer = verify_registration_file(create_registration_file(alice, name="Alice", endpoint="https://alice.example/ace"), pinned_at=TIMESTAMP)
 EXPECTED_BODY = {"message": "hello from python"}
 msg = create_message(alice, bob_peer, "text", EXPECTED_BODY, ThreadStateMachine(A), timestamp=TIMESTAMP)
 envelope = msg.to_dict()
@@ -871,7 +878,7 @@ def record(ident: SoftwareIdentity, registered_at: int, *, tamper: bool = False)
 
 
 def reg_file(ident: SoftwareIdentity) -> dict:
-    return ident.to_registration_file(name="Alice", endpoint="https://alice.example/ace").to_dict()
+    return create_registration_file(ident, name="Alice", endpoint="https://alice.example/ace").to_dict()
 
 
 def binding_case(name: str, now: int, steps: list[tuple]) -> dict:
@@ -965,6 +972,7 @@ vectors = {
         "urls": url_vectors,
         "base64": base64_vectors,
         "peerBinding": peer_binding,
+        **client_vectors(),
     },
 }
 
@@ -976,3 +984,5 @@ print(f"Generated {OUT}")
 for section in ("envelopes", "bodies", "replay", "auth", "registrations", "registrationErrors", "urls", "base64", "peerBinding"):
     print(f"  {section}: {len(vectors['vectors'][section])}")
 print(f"  transitions: {len(cases)} cases, matrix {len(matrix)}x{len(ECONOMIC)}x2")
+for section in ("webhooks", "relayUrls", "blockedAddresses", "relayErrors", "directReceive"):
+    print(f"  {section}: {len(vectors['vectors'][section]['cases'])}")

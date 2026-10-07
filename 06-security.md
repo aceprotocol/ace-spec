@@ -269,6 +269,21 @@ Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) �
 
 Pure (non-hybrid) ML-KEM is deliberately not used: every production deployment of post-quantum key exchange (Apple, Signal, Chrome, Cloudflare, IETF TLS/MLS suites) is hybrid, so a lattice break does not leave the protocol weaker than classical X25519.
 
+## SDK Error Codes
+
+An SDK reports every failure as one error type carrying a `code`. The `category` is a fixed function of the code. `transient` and `local` failures are retryable; `permanent` ones are not.
+
+| Category | Codes |
+|----------|-------|
+| `permanent` | `invalid_argument`, `invalid_envelope`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `scheme_mismatch`, `stale_timestamp`, `replay`, `decryption_failed`, `invalid_body`, `transition_not_allowed`, `wrong_role`, `wrong_party`, `bad_reference`, `limit_exceeded`, `invalid_key`, `invalid_registration`, `invalid_profile`, `invalid_peer`, `stale_peer_binding`, `unknown_peer`, `not_registered`, `relay_rejected`, `envelope_expired`, `pending_send_conflict`, `blocked_address`, `direct_rejected` |
+| `transient` | `relay_unavailable`, `relay_protocol_error`, `fetch_failed`, `direct_unavailable` |
+| `local` | `storage_failed`, `identity_unavailable`, `handler_failed`, `receiver_busy`, `lock_busy` |
+
+- `lock_busy`: a store lock is held by another holder and was not acquired within the lock timeout (default 10 s). `storage_failed` is reserved for I/O failures.
+- `direct_rejected`: the receiver's direct endpoint answered 400 or 413 ([08-relay.md](./08-relay.md) § Direct Delivery). The error carries the receiver's `error` string as its remote code only when that string matches `^[a-z0-9_]{1,64}$`; any other value is peer-controlled text and is dropped.
+- `direct_unavailable`: the direct endpoint could not be reached or answered anything other than 2xx `{"ok":true}`, 400 or 413 (network failure, timeout, 429, 503, other statuses).
+- Relay HTTP responses map onto these codes as specified in [08-relay.md](./08-relay.md) § Client Rules.
+
 ## Implementation Checklist
 
 - [ ] Strict envelope decoding, body rules and size limits (04-messages.md)
@@ -293,13 +308,13 @@ The ACE SDKs persist pipeline state in a key-value store with these keys, so tha
 | Key | Content |
 |-----|---------|
 | `replay.json` | `{"entries":[[messageId,from,timestamp],…],"horizon":H,"senderHorizons":{from:H[from]},"version":1}`; entries in seen-store order |
-| `cursors.json` | `{"cursors":{"<relay url, lowercase scheme and host, no trailing />":"<ms>-<seq>"},"version":1}` |
+| `cursors.json` | `{"cursors":{"<normalized relay URL, 08-relay.md § Client Rules>":"<ms>-<seq>"},"version":1}` |
 | `threads/<sha256(conversationId ‖ 0x00 ‖ threadId)>.json` | `{"conversationId","history":[{"from","messageId","timestamp","type"}],"localAceId","peerAceId","pending":null\|PendingSend,"state","threadId","version":1}` |
 | `outbox/<sha256(requestId)>.json` | `{"message":Envelope,"requestId","stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends) |
 | `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","source":"relay"\|"direct","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
 | `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","source":"relay","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
 | `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load |
-| `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}` |
+| `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}`; `name` matches `^[a-z0-9][a-z0-9_-]{0,63}$` |
 
 - `PendingSend` is `{"message":Envelope,"requestId","stagedAt","status"}`; inside a thread record it has no `version`. A thread has at most one pending send.
 - `ThreadSnapshot` is the thread record without `pending` and `version`.

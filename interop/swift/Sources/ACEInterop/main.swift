@@ -105,7 +105,7 @@ func gen() throws {
         let ts = now()
         var auth: [String: Any] = [:]
         for (k, req) in AUTH { auth[k] = ["headers": try createAuthHeaders(identity: id, request: req, timestamp: ts)] }
-        let reg = try id.toRegistrationFile(name: "Agent \(LANG) \(s.rawValue)", endpoint: "https://\(LANG).example/ace")
+        let reg = try createRegistrationFile(for: id, name: "Agent \(LANG) \(s.rawValue)", endpoint: "https://\(LANG).example/ace")
         let req = try createRegistrationRequest(identity: id, profile: .replace(profile(LANG)), timestamp: ts)
         try wr("ids/\(LANG)-\(s.rawValue)\(suffix).json", [
             "lang": LANG, "scheme": s.rawValue, "export": try encodable(id.exportPrivateKey()), "aceId": id.getACEId(),
@@ -126,7 +126,7 @@ func verify() throws {
             r["import"] = attempt {
                 let e = try JSONDecoder().decode(SoftwareIdentityExport.self, from: data(d["export"]!))
                 let idn = try SoftwareIdentity(export: e)
-                let reg = try idn.toRegistrationFile(name: rf["name"] as! String, endpoint: rf["endpoint"] as! String)
+                let reg = try createRegistrationFile(for: idn, name: rf["name"] as! String, endpoint: rf["endpoint"] as! String)
                 return ["aceId": idn.getACEId(), "address": idn.getAddress(), "scheme": idn.getSigningScheme().rawValue,
                         "signingPublicKey": b64(idn.getSigningPublicKey()), "encryptionPublicKey": b64(idn.getEncryptionPublicKey()),
                         "reexport": try encodable(idn.exportPrivateKey()), "registrationFile": try encodable(reg)]
@@ -285,9 +285,9 @@ func persist() async throws {
                 if let e = m["error"] { throw NSError(domain: "sender \(S) failed: \(e)", code: 1) }
                 let text = try data(m["text"]!), rfq = try data(m["rfq"]!)
                 receives[S] = [
-                    "text": outcome(await inbox.receive(text, source: .direct)),
-                    "rfq": outcome(await inbox.receive(rfq, source: .direct)),
-                    "textAgain": outcome(await inbox.receive(text, source: .direct)),
+                    "text": outcome(try await inbox.receive(text, source: .direct)),
+                    "rfq": outcome(try await inbox.receive(rfq, source: .direct)),
+                    "textAgain": outcome(try await inbox.receive(text, source: .direct)),
                 ]
             }
             await inbox.close()
@@ -355,7 +355,7 @@ func load() async throws {
                     let handed = Counter()
                     let inbox = try await Inbox.open(identity: me, store: store, peers: peers) { _ in handed.inc() }
                     let m = try rd("msgs/m1/\(LANGS[0])-\(R)-\(s.rawValue).json")
-                    let dup = outcome(await inbox.receive(try data(m["rfq"]!), source: .direct))
+                    let dup = outcome(try await inbox.receive(try data(m["rfq"]!), source: .direct))
                     await inbox.close()
                     return ["handedOnOpen": handed.value, "duplicate": dup]
                 }

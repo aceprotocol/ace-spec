@@ -4,7 +4,7 @@
 
 ## Version
 
-1.0 (Draft)
+1.0 (Draft). Pre-release: the protocol may change without notice until its first release.
 
 ## Overview
 
@@ -39,16 +39,10 @@ Layer 5: Reputation               → Transaction-anchored feedback, scoring, po
 | Cross-Chain | Yes (signingScheme registry) | N/A | N/A |
 | Post-Quantum Encryption | Yes (hybrid KEM) | No | No |
 
-## Version Compatibility
+## Unknown Types and Fields
 
-ACE follows these versioning rules:
-
-1. **Minor versions (1.x) are backward compatible.** A v1.1 agent MUST be able to communicate with a v1.0 agent.
-2. **A message whose `type` is not defined MUST NOT be processed.** Receivers discard it (an SDK quarantines it, see [06-security.md](./06-security.md) § Durable Delivery) and MUST NOT break the connection or respond with an error.
-3. **Unknown fields MUST be ignored.** Fields not defined in the agent's version of the spec MUST be ignored, not rejected. This applies to the message envelope and its nested `encryption` and `signature` objects, message bodies, registration files, registration requests and peer records. Exception: `profile.pricing` is closed ([02-discovery.md](./02-discovery.md)).
-4. **Major versions (2.x) MAY be breaking.** A v2.0 agent is NOT required to be compatible with v1.x agents.
-
-These rules ensure the protocol can evolve without coordination — new fields can be introduced in minor versions and older agents ignore them; a new message type is discarded by agents that do not define it.
+1. **A message whose `type` is not defined MUST NOT be processed.** Receivers discard it (an SDK quarantines it, see [06-security.md](./06-security.md) § Durable Delivery) and MUST NOT break the connection or respond with an error.
+2. **Unknown fields MUST be ignored**, not rejected. This applies to the message envelope and its nested `encryption` and `signature` objects, message bodies, registration files, registration requests and peer records. Exception: `profile.pricing` is closed ([02-discovery.md](./02-discovery.md)).
 
 ## Specification Documents
 
@@ -59,9 +53,9 @@ These rules ensure the protocol can evolve without coordination — new fields c
 | [03-encryption.md](./03-encryption.md) | X-Wing hybrid post-quantum KEM + HKDF-SHA256 + AES-256-GCM encryption scheme |
 | [04-messages.md](./04-messages.md) | Encoding rules, size limits, message envelope, types, economic schemas and state machine |
 | [05-settlement.md](./05-settlement.md) | Settlement methods: crypto/*, fiat/* |
-| [06-security.md](./06-security.md) | Security model: processing pipeline, replay protection, durable delivery, fail-stop |
+| [06-security.md](./06-security.md) | Security model: processing pipeline, replay protection, durable delivery, SDK error codes |
 | [07-reputation.md](./07-reputation.md) | Reputation system: transaction-anchored feedback, scoring, anti-gaming |
-| [08-relay.md](./08-relay.md) | Relay HTTP API: registration, discovery, send, inbox, listen, intents, errors |
+| [08-relay.md](./08-relay.md) | Relay HTTP API: registration, discovery, send, inbox, listen, intents, webhooks, errors; direct delivery; client rules |
 | [openapi.yaml](./openapi.yaml) | OpenAPI 3.1 rendering of the relay API (documentation; 08-relay.md is normative) |
 
 ## Signing Schemes

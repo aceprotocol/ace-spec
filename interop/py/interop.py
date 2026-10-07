@@ -128,7 +128,7 @@ def gen() -> None:
             "lang": LANG, "scheme": s.replace("-rx", ""), "export": idn.export_private_key(), "aceId": idn.get_ace_id(),
             "address": idn.get_address(), "signingPublicKey": b64(idn.get_signing_public_key()),
             "encryptionPublicKey": b64(idn.get_encryption_public_key()),
-            "registrationFile": idn.to_registration_file(name=f"Agent {LANG} {s}", endpoint=f"https://{LANG}.example/ace").to_dict(),
+            "registrationFile": ace.create_registration_file(idn, name=f"Agent {LANG} {s}", endpoint=f"https://{LANG}.example/ace").to_dict(),
             "registrationRequest": ace.create_registration_request(idn, profile(LANG), ts),
             "auth": auth,
         })
@@ -143,7 +143,7 @@ def verify() -> None:
 
             def imp() -> dict:
                 idn = ace.SoftwareIdentity.from_export(d["export"])
-                reg = idn.to_registration_file(name=d["registrationFile"]["name"], endpoint=d["registrationFile"]["endpoint"])
+                reg = ace.create_registration_file(idn, name=d["registrationFile"]["name"], endpoint=d["registrationFile"]["endpoint"])
                 return {
                     "aceId": idn.get_ace_id(), "address": idn.get_address(), "scheme": idn.get_signing_scheme(),
                     "signingPublicKey": b64(idn.get_signing_public_key()),
@@ -257,6 +257,11 @@ def recv2() -> None:
     wr(f"out/{LANG}/recv2.json", out)
 
 
+def wire(envelope: dict) -> bytes:
+    """The wire bytes of an envelope (``Inbox.receive`` takes raw message bytes)."""
+    return json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+
+
 def outcome(o: ace.ReceiveOutcome) -> dict:
     if o.kind == "delivered":
         return {"kind": o.kind, "messageId": o.message.message_id}  # type: ignore[union-attr]
@@ -284,9 +289,9 @@ def persist() -> None:
                     if "error" in m:
                         raise RuntimeError(f"sender {S} failed: {m['error']}")
                     r["receives"][S] = {
-                        "text": outcome(inbox.receive(m["text"], ace.ReceiveSource.direct())),
-                        "rfq": outcome(inbox.receive(m["rfq"], ace.ReceiveSource.direct())),
-                        "textAgain": outcome(inbox.receive(m["text"], ace.ReceiveSource.direct())),
+                        "text": outcome(inbox.receive(wire(m["text"]), ace.ReceiveSource.direct())),
+                        "rfq": outcome(inbox.receive(wire(m["rfq"]), ace.ReceiveSource.direct())),
+                        "textAgain": outcome(inbox.receive(wire(m["text"]), ace.ReceiveSource.direct())),
                     }
             finally:
                 inbox.close()
@@ -351,7 +356,7 @@ def load() -> None:
                     inbox = ace.Inbox.open(me, store, peers, lambda m: handed.append(m.message_id))
                     try:
                         m = rd(f"msgs/m1/{LANGS[0]}-{R}-{s}.json")
-                        dup = outcome(inbox.receive(m["rfq"], ace.ReceiveSource.direct()))
+                        dup = outcome(inbox.receive(wire(m["rfq"]), ace.ReceiveSource.direct()))
                         return {"handedOnOpen": len(handed), "duplicate": dup}
                     finally:
                         inbox.close()

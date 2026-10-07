@@ -113,7 +113,7 @@ All three requests are header-authenticated under the `webhook` signing context 
 
 - `PUT /v1/webhook` with `{"url": string, "secret": string}` sets or replaces the webhook and resets `failures` to 0 and `status` to `active`.
   - `url` MUST match the ACE HTTPS URL grammar ([04-messages.md](./04-messages.md) § HTTPS URLs).
-  - A relay MUST resolve the host and reject (`invalid_webhook`) any address that is loopback, private, link-local, multicast, reserved or otherwise not globally routable. It MUST repeat that check at delivery time and treat a blocked address as a failed attempt.
+  - A relay MUST resolve the host and reject (`invalid_webhook`) any blocked address (§ Client Rules, Blocked Addresses). It MUST repeat that check at delivery time and treat a blocked address as a failed attempt.
   - `secret` is 16..128 characters with no control characters. The relay stores it to sign notifications and never returns it.
 - `GET /v1/webhook` returns `{"webhook": null}` when none is set, else `{"webhook": {"url", "status", "failures", "updatedAt", "lastDeliveredAt"?, "lastError"?}}`. Times are Unix seconds; `lastError` is a short string.
 - `DELETE /v1/webhook` removes it; it is idempotent.
@@ -130,7 +130,7 @@ X-ACE-Webhook-Signature: sha256=<lowercase hex of HMAC-SHA256(secret, decimal(ti
 {"event":"message","aceId":"ace:sha256:…","streamId":"<ms>-<seq>"}
 ```
 
-`streamId` is the newest queued entry when the notification is sent. A receiver MUST verify the signature over the raw body and reject `|now - timestamp| > TIMESTAMP_WINDOW_SECONDS` before acting. Redirects are not followed.
+`streamId` is the newest queued entry when the notification is sent. A receiver MUST verify the signature over the raw body and reject `|now - timestamp| > TIMESTAMP_WINDOW_SECONDS` before acting (`test-vectors.json` → `webhooks`). Redirects are not followed.
 
 ### Delivery rules
 
@@ -150,16 +150,33 @@ Content-Type: application/json
 {"message": Envelope}
 ```
 
-| Response | Meaning |
-|----------|---------|
-| 200 `{"ok":true,"messageId":string}` | Accepted, or an exact duplicate (same envelope fingerprint) |
-| 400 `{"ok":false,"error":string}` | Permanently rejected; `error` is a pipeline error code ([06-security.md](./06-security.md)), or `invalid_argument` for a request whose body is not a JSON object with a `message` member; a malformed envelope inside it is a pipeline error such as `invalid_envelope`. The sender MUST NOT retry the same envelope directly |
-| 429 or 503 `{"ok":false,"error":string}` | Temporarily unavailable; the sender falls back to the relay |
+Endpoint paths are free. `/ace/receive` is a convention of the reference CLI, not a requirement.
 
-- The request body is at most `MAX_ENVELOPE_BYTES + 1024` bytes. The receiver MAY answer 413 to a larger body; the sender treats it as permanent.
-- The receiver processes the message as direct-sourced ([06-security.md](./06-security.md) § Durable Delivery): unauthenticated until verified, `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`, rejections not persisted.
-- A sender with a verified peer that has an endpoint SHOULD try it first and then the relay. Both paths deliver the same envelope (same `messageId`); the receiver's replay state makes the second copy a duplicate.
-- Endpoint paths are free. `/ace/receive` is a convention of the reference CLI, not a requirement.
+### Receiver
+
+The receiver processes the `message` member as a direct-sourced message ([06-security.md](./06-security.md) § Durable Delivery): unauthenticated until verified, `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`, rejections not persisted. Unknown request members are ignored. It answers with the first matching row:
+
+| Condition | Response |
+|-----------|----------|
+| Receiver not accepting (closed or shutting down); not a fault of the request, so the sender falls back to the relay | 503 `{"ok":false,"error":"internal_error"}` |
+| Body larger than `MAX_DIRECT_BODY_BYTES` | 413 `{"ok":false,"error":"payload_too_large"}` |
+| Body is not UTF-8 JSON whose top level is an object with a `message` member | 400 `{"ok":false,"error":"invalid_argument"}` |
+| Delivered, or a duplicate of an accepted message | 200 `{"ok":true,"messageId":string}` |
+| Rejected by the pipeline (including a `message` that is not a valid envelope) | 400 `{"ok":false,"error":<pipeline code>}` |
+| Retryable failure (`transient` or `local` category) | 503 `{"ok":false,"error":<code>}` |
+| Any other `permanent` SDK error | 400 `{"ok":false,"error":<code>}` |
+| Any other failure | 503 `{"ok":false,"error":"internal_error"}` |
+
+A `message` member that is present is processed whatever its JSON type (`null` included); a value that is not an envelope object fails envelope decoding (`invalid_envelope`). HTTP serving, routing and rate limiting (429 `{"ok":false,"error":"rate_limited"}`) belong to the application (`test-vectors.json` → `directReceive`).
+
+### Sender
+
+- The endpoint MUST be an ACE HTTPS URL ([04-messages.md](./04-messages.md) § HTTPS URLs). The sender resolves its host and refuses the endpoint when any resolved address is blocked (§ Client Rules, Blocked Addresses), then connects only to a validated address where the platform allows it. An unsafe or malformed endpoint is `invalid_argument`.
+- Redirects are not followed. The default timeout is 5 seconds.
+- Delivery succeeds iff the response is 2xx and its body is a JSON object with `"ok": true`.
+- 400 or 413 is `direct_rejected`, carrying the receiver's `error` string only when it matches `^[a-z0-9_]{1,64}$` (otherwise none; it is peer-controlled text). The recipient has rejected this envelope: the sender MUST NOT retry it directly and MUST NOT fall back to the relay for it.
+- Anything else (network failure, timeout, 429, 503, any other status or body) is `direct_unavailable`. The sender falls back to the relay.
+- A sender with a verified peer that has an endpoint SHOULD try it first, and falls back to the relay on `direct_unavailable` or an unsafe endpoint. Both paths carry the same envelope (same `messageId`); the receiver's replay state makes a second copy a duplicate.
 
 ## Errors
 
@@ -186,10 +203,11 @@ Error responses have the body `{"error": <code>, "message"?: string}`.
 | `recipient_inbox_full` | 429 | Recipient queue at its bound |
 | `sender_quota_exceeded` | 429 | Per-(sender, recipient) quota reached |
 | `max_open_intents` | 429 | Open intent limit reached |
+| `internal_error` | 500 | Unexpected relay failure; the request MAY be retried |
 
 ## Limits
 
-- Request body: at most `MAX_ENVELOPE_BYTES`.
+- Request body: at most `MAX_DIRECT_BODY_BYTES` (room for the `{"message": …}` wrapper around an envelope of up to `MAX_ENVELOPE_BYTES`).
 - Message TTL: at most `OFFLINE_WINDOW_SECONDS`. A relay MUST refuse to start with a larger configured TTL.
 - `GET /v1/inbox` `limit`: at most `MAX_INBOX_PAGE`.
 - SSE `data` line: at most `MAX_ENVELOPE_BYTES`.
@@ -199,3 +217,51 @@ Error responses have the body `{"error": <code>, "message"?: string}`.
 - A request body that is not valid JSON, has the wrong content type, or exceeds the body limit is rejected with 400 `invalid_argument`.
 - SDK-only decode errors map onto the table: `unsupported_version` → `invalid_envelope`, `scheme_mismatch` → `invalid_signature`.
 - A relay stores and forwards only the envelope fields defined in [04-messages.md](./04-messages.md). Unknown envelope fields are dropped: they are covered by neither the signature nor the fingerprint.
+
+## Client Rules
+
+Normative for relay clients (SDKs).
+
+### Relay URL
+
+A client normalizes the relay base URL before use:
+
+1. The scheme is `http` or `https`, case-insensitive, and is written lowercase.
+2. The URL contains no `?`, no `#`, no userinfo (`@` in the authority), and no character at or below U+0020 or equal to U+007F. Nothing is trimmed.
+3. The host is either a non-empty run of ASCII letters, digits, `.` and `-`, written lowercase, or a bracketed IPv6 literal (`[` IPv6 address `]`, hex digits written lowercase); anything else (non-ASCII, percent-encoded, `_`, a second `:`) is invalid. A port, if present, is 1–5 decimal digits without a leading zero, in 1..65535; `:443` for `https` and `:80` for `http` are removed.
+4. The path is kept as given, except that all trailing `/` are removed.
+
+A URL that fails 1–3 is `invalid_argument`. The normalized string is the key of the client's durable inbox cursor ([06-security.md](./06-security.md) § Appendix A, `cursors.json`), so equivalent spellings share one cursor (`test-vectors.json` → `relayUrls`).
+
+### Responses
+
+A client MUST NOT follow redirects, for every request including `listen`. Before mapping, a 409 `replay` is retried once with a fresh timestamp (§ Authentication). A response other than the call's expected success then maps to an SDK error ([06-security.md](./06-security.md) § SDK Error Codes), in order:
+
+| Status | Relay `error` | SDK code |
+|--------|---------------|----------|
+| 1xx, 3xx, 2xx the call does not expect (e.g. 204 where a JSON body is expected), 600 or more | any | `relay_protocol_error` |
+| 408, 5xx | any | `relay_unavailable` |
+| 429 | `rate_limited` or absent | `relay_unavailable` |
+| 429 | any other (`recipient_inbox_full`, `sender_quota_exceeded`, `max_open_intents`, …) | `relay_rejected` |
+| 400 | `envelope_expired` | `envelope_expired` |
+| 403 | `not_registered` | `not_registered` |
+| 404 | `unknown_peer` | `unknown_peer` |
+| other 4xx | any | `relay_rejected` |
+
+- The relay `error` is the body's `error` member when the body is a JSON object and that member is a string; otherwise it is absent. The error keeps the HTTP status and the relay `error`.
+- `Retry-After` is honored only as delay-seconds (`^[0-9]+$`); an HTTP-date or any other form is ignored. It is attached only when the mapped code is `transient`.
+- `test-vectors.json` → `relayErrors`.
+
+### Listen
+
+- Lines end with CR, LF or CRLF. An event is dispatched only if it has at least one `data` field; `id` and `event` apply only to the event in which they appear (the `id` is not carried over to a later event). Comment lines (`:`) are heartbeats, not events.
+- A connection makes progress when it delivers a `catchup`, `message` or `drain` event; each such event resets the consecutive-failure count. `connected`, events of unknown type and heartbeats are not progress.
+- `drain`, or a clean end of the stream, reconnects at once with the failure count reset only if that connection made progress. A connection that ends having delivered only `connected` (or nothing), a failed connect, or a broken stream counts as a failure: reconnect after backoff 1, 2, 4 … 30 s (at least `Retry-After`, at most 30 s); 10 consecutive failures end `listen` with `relay_unavailable`.
+- Each `catchup` / `message` event's `data` is handed to the Inbox raw; a frame that is not an envelope is quarantined and never stops the stream.
+
+### Blocked Addresses
+
+An address is blocked when it lies in one of these ranges. IPv4-mapped (`::ffff:0:0/96`) and NAT64 (`64:ff9b::/96`) IPv6 addresses are judged by their embedded IPv4 address. An IPv6 literal's `%zone` suffix is ignored; any other input that is not an IP literal (an IPv4 literal with `%…` included) is blocked (fail closed) (`test-vectors.json` → `blockedAddresses`).
+
+- IPv4: `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.0.0.0/24`, `192.0.2.0/24`, `192.168.0.0/16`, `198.18.0.0/15`, `198.51.100.0/24`, `203.0.113.0/24`, `224.0.0.0/4`, `240.0.0.0/4`.
+- IPv6: `::/128`, `::1/128`, `100::/64`, `2001:db8::/32`, `fc00::/7`, `fe80::/10`, `ff00::/8`.

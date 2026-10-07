@@ -98,7 +98,7 @@ class Checker:
                             self.expect(T, src, v, s, imp[k] == d[k], f"import {k}: {imp[k]!r} != {d[k]!r}")
                         self.expect(T, src, v, s, imp["reexport"] == d["export"], "re-export differs from export")
                         self.expect(T, src, v, s, strip_none(imp["registrationFile"]) == strip_none(d["registrationFile"]),
-                                    f"toRegistrationFile differs: {imp['registrationFile']} vs {d['registrationFile']}")
+                                    f"createRegistrationFile differs: {imp['registrationFile']} vs {d['registrationFile']}")
                     rf = r["regFile"]
                     if self.ok(T, src, v, s, rf, "verifyRegistrationFile"):
                         for k in ("aceId", "scheme", "signingPublicKey", "encryptionPublicKey", "address"):

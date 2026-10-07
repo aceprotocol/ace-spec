@@ -42,7 +42,7 @@ Data is exchanged as JSON files in `$WORK`.
 
 | # | Matrix | Check |
 |---|--------|-------|
-| 1 | exporter × importer | `exportPrivateKey` → `fromExport` gives the same ACE ID, public keys, address and re-export; `toRegistrationFile` of the imported identity equals the original; `verifyRegistrationFile` passes with the same keys |
+| 1 | exporter × importer | `exportPrivateKey` → `fromExport` gives the same ACE ID, public keys, address and re-export; `createRegistrationFile` of the imported identity equals the original; `verifyRegistrationFile` passes with the same keys |
 | 2 | sender × receiver | `text` and `rfq` (with `threadId`, non-ASCII strings, integer `ttl`) parse with identical bodies, IDs and parties; a second parse is `replay`; copies with one `kemCiphertext` byte flipped fail with `invalid_signature` in all SDKs; the receiver replies with an `offer` on the same thread (state `rfq` → `offered`) and the original sender, restoring its thread state with `ThreadStateMachine.fromState`, parses it (history `rfq, offer`) |
 | 3 | creator × verifier | `createRegistrationRequest` (with a profile) passes `verifyRegistrationRequest` everywhere with an identical `requestDigest` |
 | 4 | creator × verifier | `createAuthHeaders` for `listen`, `inbox`, `unregister` and `intent` pass `parseAuthHeaders` + `verifyAuthHeaders`; headers checked against a different request fail with `invalid_signature` |

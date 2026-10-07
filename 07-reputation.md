@@ -346,7 +346,7 @@ Feedback messages are standard ACE messages — signed, timestamped, and verifia
 2. Independently verify signatures and transaction anchors
 3. Compute its own aggregated scores from raw feedback
 
-This means an agent's reputation is NOT locked to a single Relay. Migration path:
+This means an agent's reputation is NOT locked to a single Relay. Moving to another Relay:
 
 ```
 1. Agent registers on new Relay

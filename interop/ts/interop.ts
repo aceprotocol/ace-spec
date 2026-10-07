@@ -22,6 +22,8 @@ function wr(p: string, v: unknown) {
 }
 const now = () => Math.floor(Date.now() / 1000);
 const b64 = (u: Uint8Array) => ace.toBase64(u);
+/** The wire bytes of an envelope (`Inbox.receive` takes raw message bytes). */
+const wire = (envelope: unknown) => new TextEncoder().encode(JSON.stringify(envelope));
 function fail(e: any) {
   return { ok: false, code: e?.code ?? 'exception', message: String(e?.message ?? e) };
 }
@@ -74,7 +76,7 @@ async function gen() {
     wr(`ids/${LANG}-${s}.json`, {
       lang: LANG, scheme: s.replace('-rx', ''), export: id.exportPrivateKey(), aceId: id.getACEId(), address: id.getAddress(),
       signingPublicKey: b64(id.getSigningPublicKey()), encryptionPublicKey: b64(id.getEncryptionPublicKey()),
-      registrationFile: id.toRegistrationFile({ name: `Agent ${LANG} ${s}`, endpoint: `https://${LANG}.example/ace` }),
+      registrationFile: ace.createRegistrationFile(id, { name: `Agent ${LANG} ${s}`, endpoint: `https://${LANG}.example/ace` }),
       registrationRequest: await ace.createRegistrationRequest(id, profile(LANG) as any, ts),
       auth,
     });
@@ -92,7 +94,7 @@ async function verify() {
         aceId: idn.getACEId(), address: idn.getAddress(), scheme: idn.getSigningScheme(),
         signingPublicKey: b64(idn.getSigningPublicKey()), encryptionPublicKey: b64(idn.getEncryptionPublicKey()),
         reexport: idn.exportPrivateKey(),
-        registrationFile: idn.toRegistrationFile({ name: d.registrationFile.name, endpoint: d.registrationFile.endpoint }),
+        registrationFile: ace.createRegistrationFile(idn, { name: d.registrationFile.name, endpoint: d.registrationFile.endpoint }),
       };
     });
     let peer: any = null;
@@ -210,9 +212,9 @@ async function persist() {
           const m = rd(`msgs/m1/${S}-${LANG}-${s}.json`);
           if (m.error) throw new Error(`sender ${S} failed: ${JSON.stringify(m.error)}`);
           r.receives[S] = {
-            text: outcome(await inbox.receive(m.text, { kind: 'direct' })),
-            rfq: outcome(await inbox.receive(m.rfq, { kind: 'direct' })),
-            textAgain: outcome(await inbox.receive(m.text, { kind: 'direct' })),
+            text: outcome(await inbox.receive(wire(m.text), { kind: 'direct' })),
+            rfq: outcome(await inbox.receive(wire(m.rfq), { kind: 'direct' })),
+            textAgain: outcome(await inbox.receive(wire(m.text), { kind: 'direct' })),
           };
         }
       } finally {
@@ -277,7 +279,7 @@ async function load() {
         const inbox = await ace.Inbox.open({ identity: me, store, peers, onMessage: () => { handed++; } });
         try {
           const m = rd(`msgs/m1/${LANGS[0]}-${R}-${s}.json`);
-          const dup = outcome(await inbox.receive(m.rfq, { kind: 'direct' }));
+          const dup = outcome(await inbox.receive(wire(m.rfq), { kind: 'direct' }));
           return { handedOnOpen: handed, duplicate: dup };
         } finally {
           await inbox.close();

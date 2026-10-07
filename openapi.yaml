@@ -16,7 +16,7 @@ components:
     XAceTimestamp: { name: X-ACE-Timestamp, in: header, required: true, description: 'Unix seconds, at most 2^53-1', schema: { type: string, pattern: '^(0|[1-9][0-9]{0,15})$' } }
     XAceSignature: { name: X-ACE-Signature, in: header, required: true, description: 'The scheme''s signature encoding (04-messages.md § Signature Encoding by Scheme) over buildSignData(x-ace-action, aceId, timestamp, payload)', schema: { type: string, maxLength: 512 } }
     Since: { name: since, in: query, required: false, description: 'A stream ID `<ms>-<seq>`, or `-` (the default, from the start)', schema: { type: string, pattern: '^(-|[0-9]{1,20}-[0-9]{1,20})$' } }
-    Cursor: { name: cursor, in: query, required: false, description: 'Opaque to clients; pass back the previous page''s `cursor`', schema: { type: string } }
+    Cursor: { name: cursor, in: query, required: false, description: 'Opaque to clients; pass back the previous page''s `cursor`', schema: { type: string, maxLength: 512 } }
   schemas:
     HttpsUrl:
       type: string
@@ -35,7 +35,7 @@ components:
           enum: [invalid_argument, invalid_envelope, invalid_registration, invalid_profile, invalid_webhook, invalid_key,
                  stale_timestamp, envelope_expired, invalid_signature, invalid_authorization, not_registered, unknown_peer,
                  replay, identity_conflict, message_id_conflict, rate_limited, recipient_inbox_full, sender_quota_exceeded,
-                 max_open_intents]
+                 max_open_intents, internal_error]
         message: { type: string }
     Profile:
       type: object
@@ -141,6 +141,7 @@ components:
       headers:
         Retry-After: { description: 'Seconds to wait (sent with `rate_limited`)', schema: { type: integer } }
       content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    InternalError: { description: '`internal_error`: unexpected relay failure', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 paths:
   /v1/register:
     post:
@@ -152,6 +153,7 @@ paths:
         "401": { $ref: '#/components/responses/Error', description: '`invalid_signature`, `invalid_authorization`' }
         "409": { $ref: '#/components/responses/Error', description: '`identity_conflict`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/unregister:
     post:
       summary: Remove the caller's identity, profile and webhook
@@ -164,6 +166,7 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`, `identity_conflict`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/peer:
     get:
       summary: A verifiable peer record
@@ -172,13 +175,15 @@ paths:
         "200": { description: Peer record, content: { application/json: { schema: { $ref: '#/components/schemas/PeerRecord' } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`' }
         "404": { $ref: '#/components/responses/Error', description: '`unknown_peer`' }
+        "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/discover:
     get:
       summary: Search registered agents
       parameters:
-        - { name: q, in: query, schema: { type: string }, description: 'Full-text search on name, description, tags, capabilities' }
-        - { name: tags, in: query, schema: { type: string }, description: 'Comma-separated exact match (intersection) over tags and capabilities' }
-        - { name: chain, in: query, schema: { type: string }, description: CAIP-2 chain ID }
+        - { name: q, in: query, schema: { type: string, maxLength: 256 }, description: 'Full-text search on name, description, tags, capabilities' }
+        - { name: tags, in: query, schema: { type: string, maxLength: 512 }, description: 'Comma-separated exact match (intersection) over tags and capabilities' }
+        - { name: chain, in: query, schema: { type: string, maxLength: 128 }, description: CAIP-2 chain ID }
         - { name: scheme, in: query, schema: { type: string, enum: [ed25519, secp256k1] } }
         - { name: online, in: query, schema: { type: boolean }, description: Only agents with active relay connections }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
@@ -187,6 +192,7 @@ paths:
         "200": { description: Page, content: { application/json: { schema: { type: object, required: [agents, cursor], properties: { agents: { type: array, items: { $ref: '#/components/schemas/PeerRecord' } }, cursor: { type: [string, 'null'] } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/send:
     post:
       summary: Enqueue an envelope for its recipient
@@ -200,6 +206,7 @@ paths:
         "404": { $ref: '#/components/responses/Error', description: '`unknown_peer` (recipient)' }
         "409": { $ref: '#/components/responses/Error', description: '`message_id_conflict`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`, `recipient_inbox_full`, `sender_quota_exceeded`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/inbox:
     get:
       summary: Queued envelopes after a cursor
@@ -212,6 +219,7 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/listen:
     get:
       summary: Server-Sent Events stream (catchup, then live)
@@ -224,12 +232,26 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited` (including the listen-connection cap)' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/intents:
     post:
       summary: Publish an intent
       x-ace-action: intent
       parameters: [ { $ref: '#/components/parameters/XAceId' }, { $ref: '#/components/parameters/XAceTimestamp' }, { $ref: '#/components/parameters/XAceSignature' } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [need, ttl], properties: { need: { type: string }, tags: { type: array, items: { type: string } }, maxPrice: { type: string }, currency: { type: string }, ttl: { type: integer, minimum: 0, maximum: 9007199254740991, description: 'Seconds (a wire integer); a relay MAY enforce a floor' } } } } } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: '`maxPrice` and `currency` are both present or both absent (`invalid_argument`). The signed payload binds every field, with absent `tags` as `[]`.'
+              required: [need, ttl]
+              properties:
+                need: { type: string, minLength: 1, maxLength: 512 }
+                tags: { type: array, maxItems: 10, items: { type: string, minLength: 1, maxLength: 32, pattern: '^[a-z0-9][a-z0-9-]*$' }, description: May be empty }
+                maxPrice: { type: string, minLength: 1, maxLength: 64 }
+                currency: { type: string, minLength: 1, maxLength: 16 }
+                ttl: { type: integer, minimum: 60, maximum: 86400, description: 'Seconds (a wire integer). The bounds are the reference relay defaults (INTENT_MIN_TTL, INTENT_MAX_TTL); a relay MAY configure others' }
       responses:
         "201": { description: Published, content: { application/json: { schema: { type: object, required: [intentId, expiresAt], properties: { intentId: { type: string }, expiresAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`, `stale_timestamp`' }
@@ -237,13 +259,19 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`, `max_open_intents`' }
+        "500": { $ref: '#/components/responses/InternalError' }
     get:
       summary: Browse open intents
-      parameters: [ { name: q, in: query, schema: { type: string }, description: 'In the reference relay, a case-insensitive substring match over `need` and `tags`' }, { name: tags, in: query, schema: { type: string }, description: 'In the reference relay, comma-separated tags that must all be present' }, { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }, { $ref: '#/components/parameters/Cursor' } ]
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 256 }, description: 'In the reference relay, a case-insensitive substring match over `need` and `tags`' }
+        - { name: tags, in: query, schema: { type: string, maxLength: 512 }, description: 'In the reference relay, comma-separated tags that must all be present' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { $ref: '#/components/parameters/Cursor' }
       responses:
         "200": { description: Page, content: { application/json: { schema: { type: object, required: [intents, cursor], properties: { intents: { type: array, items: { $ref: '#/components/schemas/Intent' } }, cursor: { type: [string, 'null'] } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/webhook:
     put:
       summary: Set or replace the caller's webhook
@@ -257,6 +285,7 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
     get:
       summary: The caller's webhook, without its secret
       x-ace-action: webhook
@@ -268,6 +297,7 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
     delete:
       summary: Remove the caller's webhook (idempotent)
       x-ace-action: webhook
@@ -279,8 +309,10 @@ paths:
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
         "409": { $ref: '#/components/responses/Error', description: '`replay`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
+        "500": { $ref: '#/components/responses/InternalError' }
   /v1/openapi.json:
     get:
       summary: This document as JSON
       responses:
         "200": { description: OpenAPI 3.1 document, content: { application/json: { schema: { type: object } } } }
+        "500": { $ref: '#/components/responses/InternalError' }

@@ -14,7 +14,14 @@ import time
 from typing import Any, Callable
 
 import ace
-from ace.store import dump_record
+from ace.store import write_record
+
+
+def dump_record(obj: dict) -> bytes:
+    """The bytes the SDK persists for ``obj`` (Inbox writes replay.json via ``write_record``)."""
+    store = ace.MemoryStore()
+    write_record(store, "record.json", obj)
+    return store.read("record.json")
 
 LANG = "py"
 LANGS = ["ts", "py", "swift"]

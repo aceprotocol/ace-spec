@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import os
+import typing
 
 from ace import (
     ACEError,
@@ -47,7 +48,7 @@ from ace.discovery import adopt_decision
 from ace.encryption import ACE_KEM_SALT, compute_conversation_id
 from ace.messages import decode_body
 from ace.registration import registration_payload
-from ace.state_machine import ThreadEvent
+from ace.state_machine import ThreadEvent, ThreadState
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.normpath(os.path.join(HERE, "..", "test-vectors.json"))
@@ -379,8 +380,8 @@ BODY_TEMPLATES = {
     "deliver": {"type": "inline", "content": "x"},
     "confirm": {"deliverId": "$head"},
 }
-# SDK no longer exports THREAD_STATES; keep the vector ordering here.
-THREAD_STATES = ("idle", "rfq", "offered", "accepted", "rejected", "invoiced", "paid", "delivered", "confirmed")
+# Vector ordering is the declaration order of the SDK's ThreadState literal.
+THREAD_STATES = typing.get_args(ThreadState)
 PATHS = {
     "idle": [],
     "rfq": ["rfq:buyer"],

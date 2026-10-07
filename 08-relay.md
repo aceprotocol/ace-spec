@@ -153,7 +153,7 @@ Content-Type: application/json
 | Response | Meaning |
 |----------|---------|
 | 200 `{"ok":true,"messageId":string}` | Accepted, or an exact duplicate (same envelope fingerprint) |
-| 400 `{"ok":false,"error":string}` | Permanently rejected; `error` is a pipeline error code ([06-security.md](./06-security.md)). The sender MUST NOT retry the same envelope directly |
+| 400 `{"ok":false,"error":string}` | Permanently rejected; `error` is a pipeline error code ([06-security.md](./06-security.md)), or `invalid_argument` for a request that is not a well-formed `{"message": Envelope}`. The sender MUST NOT retry the same envelope directly |
 | 429 or 503 `{"ok":false,"error":string}` | Temporarily unavailable; the sender falls back to the relay |
 
 - The request body is at most `MAX_ENVELOPE_BYTES + 1024` bytes. The receiver MAY answer 413 to a larger body; the sender treats it as permanent.

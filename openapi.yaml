@@ -16,8 +16,16 @@ components:
     XAceTimestamp: { name: X-ACE-Timestamp, in: header, required: true, description: 'Unix seconds, at most 2^53-1', schema: { type: string, pattern: '^(0|[1-9][0-9]{0,15})$' } }
     XAceSignature: { name: X-ACE-Signature, in: header, required: true, description: 'The scheme''s signature encoding (04-messages.md § Signature Encoding by Scheme) over buildSignData(x-ace-action, aceId, timestamp, payload)', schema: { type: string, maxLength: 512 } }
     Since: { name: since, in: query, required: false, description: 'A stream ID `<ms>-<seq>`, or `-` (the default, from the start)', schema: { type: string, pattern: '^(-|[0-9]{1,20}-[0-9]{1,20})$' } }
-    Cursor: { name: cursor, in: query, required: false, schema: { type: string } }
+    Cursor: { name: cursor, in: query, required: false, description: 'Opaque; the previous page''s `cursor`. Absent for the first page', schema: { type: string } }
   schemas:
+    HttpsUrl:
+      type: string
+      maxLength: 2048
+      description: >-
+        ACE HTTPS URL grammar (04-messages.md § HTTPS URLs). Beyond the pattern and the 2048-character
+        limit: the host (between `://` and the first `:`, `/`, `?`, `#` or end) is at most 253 characters,
+        and a port, if present, is in 1..65535.
+      pattern: '^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:[/?#][A-Za-z0-9\-._~:/?#\[\]@!$&''()*+,;=%]*)?$'
     Error:
       type: object
       required: [error]
@@ -38,12 +46,8 @@ components:
         tags: { type: array, maxItems: 10, items: { type: string, pattern: '^[a-z0-9-]{1,32}$' } }
         capabilities: { type: array, maxItems: 20, items: { type: string, pattern: '^[a-z0-9-]{1,32}$' } }
         chains: { type: array, maxItems: 10, items: { type: string, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$' } }
-        image: &httpsUrl
-          type: string
-          maxLength: 2048
-          description: ACE HTTPS URL grammar (04-messages.md § HTTPS URLs)
-          pattern: '^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:[/?#][A-Za-z0-9\-._~:/?#\[\]@!$&''()*+,;=%]*)?$'
-        endpoint: *httpsUrl
+        image: { $ref: '#/components/schemas/HttpsUrl' }
+        endpoint: { $ref: '#/components/schemas/HttpsUrl' }
         pricing:
           type: object
           additionalProperties: false
@@ -113,19 +117,23 @@ components:
         tags: { type: array, items: { type: string } }
         maxPrice: { type: string }
         currency: { type: string }
-        ttl: { type: integer }
-        createdAt: { type: integer, description: Unix seconds }
-        expiresAt: { type: integer, description: Unix seconds }
+        ttl: { type: integer, minimum: 0, maximum: 9007199254740991, description: Seconds }
+        createdAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds }
+        expiresAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds }
     Webhook:
       type: object
       required: [url, status, failures, updatedAt]
       properties:
-        url: *httpsUrl
+        url: { $ref: '#/components/schemas/HttpsUrl' }
         status: { type: string, enum: [active, disabled] }
-        failures: { type: integer }
-        updatedAt: { type: integer, description: Unix seconds }
-        lastDeliveredAt: { type: integer, description: Unix seconds }
-        lastError: { type: string }
+        failures: { type: integer, minimum: 0 }
+        updatedAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds }
+        lastDeliveredAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds }
+        lastError:
+          type: string
+          description: >-
+            A short string (08-relay.md § Webhooks). The reference relay normalises it to one of `timeout`, `blocked`,
+            `resolve_failed`, `connect_failed`, `tls_failed`, `http_<status>` or `stopped`.
   responses:
     Error: { description: An 08-relay error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     TooManyRequests:
@@ -221,9 +229,9 @@ paths:
       summary: Publish an intent
       x-ace-action: intent
       parameters: [ { $ref: '#/components/parameters/XAceId' }, { $ref: '#/components/parameters/XAceTimestamp' }, { $ref: '#/components/parameters/XAceSignature' } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [need, ttl], properties: { need: { type: string }, tags: { type: array, items: { type: string } }, maxPrice: { type: string }, currency: { type: string }, ttl: { type: integer, minimum: 0 } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [need, ttl], properties: { need: { type: string }, tags: { type: array, items: { type: string } }, maxPrice: { type: string }, currency: { type: string }, ttl: { type: integer, minimum: 0, maximum: 9007199254740991, description: 'Seconds (a wire integer); a relay MAY enforce a floor' } } } } } }
       responses:
-        "201": { description: Published, content: { application/json: { schema: { type: object, required: [intentId, expiresAt], properties: { intentId: { type: string }, expiresAt: { type: integer } } } } } }
+        "201": { description: Published, content: { application/json: { schema: { type: object, required: [intentId, expiresAt], properties: { intentId: { type: string }, expiresAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`, `stale_timestamp`' }
         "401": { $ref: '#/components/responses/Error', description: '`invalid_signature`' }
         "403": { $ref: '#/components/responses/Error', description: '`not_registered`' }
@@ -231,7 +239,7 @@ paths:
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`, `max_open_intents`' }
     get:
       summary: Browse open intents
-      parameters: [ { name: q, in: query, schema: { type: string } }, { name: tags, in: query, schema: { type: string } }, { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }, { $ref: '#/components/parameters/Cursor' } ]
+      parameters: [ { name: q, in: query, schema: { type: string }, description: 'Text search over `need` and `tags`' }, { name: tags, in: query, schema: { type: string }, description: 'Comma-separated; every listed tag must be present' }, { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }, { $ref: '#/components/parameters/Cursor' } ]
       responses:
         "200": { description: Page, content: { application/json: { schema: { type: object, required: [intents, cursor], properties: { intents: { type: array, items: { $ref: '#/components/schemas/Intent' } }, cursor: { type: [string, 'null'] } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`' }
@@ -241,7 +249,7 @@ paths:
       summary: Set or replace the caller's webhook
       x-ace-action: webhook
       parameters: [ { $ref: '#/components/parameters/XAceId' }, { $ref: '#/components/parameters/XAceTimestamp' }, { $ref: '#/components/parameters/XAceSignature' } ]
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [url, secret], properties: { url: *httpsUrl, secret: { type: string, minLength: 16, maxLength: 128, description: No control characters; never returned } } } } } }
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [url, secret], properties: { url: { $ref: '#/components/schemas/HttpsUrl' }, secret: { type: string, minLength: 16, maxLength: 128, description: No control characters; never returned } } } } } }
       responses:
         "200": { description: Set, content: { application/json: { schema: { type: object, required: [ok], properties: { ok: { const: true } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`, `stale_timestamp`, `invalid_webhook`' }

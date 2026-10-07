@@ -16,7 +16,7 @@ components:
     XAceTimestamp: { name: X-ACE-Timestamp, in: header, required: true, description: 'Unix seconds, at most 2^53-1', schema: { type: string, pattern: '^(0|[1-9][0-9]{0,15})$' } }
     XAceSignature: { name: X-ACE-Signature, in: header, required: true, description: 'The scheme''s signature encoding (04-messages.md § Signature Encoding by Scheme) over buildSignData(x-ace-action, aceId, timestamp, payload)', schema: { type: string, maxLength: 512 } }
     Since: { name: since, in: query, required: false, description: 'A stream ID `<ms>-<seq>`, or `-` (the default, from the start)', schema: { type: string, pattern: '^(-|[0-9]{1,20}-[0-9]{1,20})$' } }
-    Cursor: { name: cursor, in: query, required: false, description: 'Opaque; the previous page''s `cursor`. Absent for the first page', schema: { type: string } }
+    Cursor: { name: cursor, in: query, required: false, description: 'Opaque to clients; pass back the previous page''s `cursor`', schema: { type: string } }
   schemas:
     HttpsUrl:
       type: string
@@ -239,7 +239,7 @@ paths:
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`, `max_open_intents`' }
     get:
       summary: Browse open intents
-      parameters: [ { name: q, in: query, schema: { type: string }, description: 'Text search over `need` and `tags`' }, { name: tags, in: query, schema: { type: string }, description: 'Comma-separated; every listed tag must be present' }, { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }, { $ref: '#/components/parameters/Cursor' } ]
+      parameters: [ { name: q, in: query, schema: { type: string }, description: 'In the reference relay, a case-insensitive substring match over `need` and `tags`' }, { name: tags, in: query, schema: { type: string }, description: 'In the reference relay, comma-separated tags that must all be present' }, { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }, { $ref: '#/components/parameters/Cursor' } ]
       responses:
         "200": { description: Page, content: { application/json: { schema: { type: object, required: [intents, cursor], properties: { intents: { type: array, items: { $ref: '#/components/schemas/Intent' } }, cursor: { type: [string, 'null'] } } } } } }
         "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`' }

@@ -37,9 +37,11 @@ A principal record appears as the `principal` member of a registration file ([01
 | `signer.scheme` | Yes | `ed25519` or `secp256k1` |
 | `signer.publicKey` | Yes | Canonical Base64 of a valid key for `signer.scheme`: 32 bytes (`ed25519`), a 33-byte compressed point (`secp256k1`) |
 | `issuedAt` | Yes | Wire integer; `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS` |
-| `expiresAt` | No | Wire integer; when present `expiresAt > issuedAt`, and the record is valid only while `expiresAt > now` |
+| `expiresAt` | Yes | Wire integer; MUST be > `issuedAt` and `expiresAt - issuedAt` MUST be <= 31622400 (366 days); at verification MUST be > now |
 | `scope` | No | 1..256 code points, no U+0000–U+001F or U+007F. Its meaning is agreed between implementations; the protocol does not interpret it |
 | `signature` | Yes | The signature of `signer` in the encoding of `signer.scheme` ([04-messages.md](./04-messages.md) § Signature Encoding by Scheme) |
+
+The values `Base64(32 bytes)` and `Base64(64 bytes)` in the example are illustrative placeholders, not valid encodings.
 
 An optional member whose value is `null` is treated as absent. Unknown members are ignored.
 
@@ -54,10 +56,10 @@ signData = buildSignData("principal", subjectAceId, issuedAt,
 ```
 
 - The **subject** is the ACE identity the record authorizes. `subjectAceId` is `ace:sha256:hex(SHA-256(subjectSigningPublicKey))`.
-- `subjectSigningPublicKeyB64` is the canonical Base64 of the subject's raw signing public key bytes, computed by the verifier from the key it has verified (the relay request's `signingPublicKey`, the peer record's signing key, or the key determined by [01-identity.md](./01-identity.md) § Validation rule 3). It is never copied from the record.
+- `subjectSigningPublicKeyB64` is the canonical Base64 of the subject's raw signing public key bytes (32 bytes for ed25519, the 33-byte compressed point for secp256k1, [01-identity.md](./01-identity.md) § Validation rule 3), computed by the verifier from the key it has verified (the relay request's `signingPublicKey`, the peer record's signing key, or the key determined by [01-identity.md](./01-identity.md) § Validation rule 3). It is never copied from the record.
 - `signer.publicKey` is used exactly as it appears in the record.
 - `join(roles, ",")` is the roles array joined with `,` (for example `controller,agent`).
-- `scopeOrEmpty` is `scope`, or the empty string when absent. `decimal(expiresAtOr0)` is `decimal(expiresAt)`, or `"0"` when absent.
+- `scopeOrEmpty` is `scope`, or the empty string when absent. `decimal(expiresAtOr0)` is `decimal(expiresAt)` (0 never occurs for a valid record; the encoding is kept for payload stability).
 - The digest is signed by the `signer` key. This is the only signing context whose signer is not the holder of `aceId`.
 
 ## Validation
@@ -69,11 +71,11 @@ signData = buildSignData("principal", subjectAceId, issuedAt,
 3. `roles` is one of the three allowed arrays.
 4. `signer.scheme` is supported and `signer.publicKey` is a canonical Base64 valid key for it.
 5. `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS`.
-6. `expiresAt`, when present, is greater than `issuedAt`.
+6. `expiresAt` is present, greater than `issuedAt`, and `expiresAt - issuedAt <= 31622400`.
 7. `scope`, when present, satisfies its rule.
 8. `signature` decodes under the encoding of `signer.scheme`.
 9. `signature` verifies under `signer` over the signData above, computed with `subjectSigningPublicKey`. A record issued for another subject fails here.
-10. When `expiresAt` is present, `expiresAt > now`.
+10. `expiresAt > now`.
 
 Where records are validated:
 
@@ -82,7 +84,7 @@ Where records are validated:
 - A peer cache that re-verifies a stored binding uses the time the binding was verified (`fetchedAt`) as `now`, so a principal that has expired since does not make the cache unreadable.
 - The receive pipeline re-validates the sender's principal with the current time at step 7 (§ Same-Account Rules).
 
-There is no revocation list. Issuers keep `expiresAt` short and re-register without the principal to withdraw it.
+There is no revocation list. `expiresAt` is required and bounded (see § Security Considerations).
 
 ## Principal Messages
 
@@ -98,6 +100,8 @@ Three message types carry a principal's own coordination. They are not economic 
 - `ref` is `{ "conversationId", "threadId"?, "messageId" }`: `conversationId` 64 lowercase hex characters, `messageId` a lowercase UUID v4 (as the envelope `messageId`), `threadId` absent, `null` (treated as absent) or a valid thread ID ([04-messages.md](./04-messages.md) § Thread IDs). Any other `ref` is `invalid_body`. `ref` points at a counterparty message the request or report is about; it carries identifiers only.
 - `amount` and `currency` are a display summary. `details` is free-form JSON carrying what the controller needs to act (chain, asset, recipient, x402 payment requirements, …).
 - `decision.result` is free-form JSON returned when the controller performed the action itself (for example a signed x402 payment payload or a transaction hash).
+- A request expires when `timestamp + ttl < now` (same convention as `offer.ttl`). An expired request MAY be re-sent.
+- Inside `ref`, a `threadId` that is `null` is treated as absent ([04-messages.md](./04-messages.md) § Body Rules optional-field rule); [04-messages.md](./04-messages.md) § Thread IDs' statement that `null` is always rejected applies to the envelope `threadId` only.
 - `report.requestId` optionally names the `request` the report concludes; it is not checked.
 
 **Action names (informative).** Implementations SHOULD use `pay`, `x402.pay`, `copy.run` and `sign` for those actions. A receiver that does not recognise an `action` still accepts the message and shows its `summary`.
@@ -113,7 +117,7 @@ A principal message is accepted only if, in this order (first failure wins):
 3. `validatePrincipalRecord(P_from, senderSigningPublicKey, now)` succeeds → else `wrong_principal`.
 4. `P_from.account == P_self.account` (exact string comparison) → else `wrong_principal`.
 5. `decision` only: `"controller" ∈ P_from.roles` → else `wrong_principal`.
-6. `decision` only: `requestId` is the `messageId` of a `request` the receiver sent in the same `conversationId`, and no `decision` for it has been accepted → else `bad_reference`.
+6. `decision` only: `requestId` is the `messageId` of a `request` the receiver sent in the same `conversationId`, and no `decision` for it has been accepted, and the request is not expired at receipt → else `bad_reference`.
 
 `request` and `report` have no role check. An accepted `decision` marks its request decided; a request has at most one accepted decision. A failed check changes nothing.
 
@@ -121,8 +125,9 @@ A principal message is accepted only if, in this order (first failure wins):
 
 SDKs keep one record per sent `request` ([06-security.md](./06-security.md) § Appendix A):
 
-`requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` = `{"conversationId","decision":null|{"messageId","outcome","timestamp"},"messageId","sentAt","to","version":1}`
+`requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` = `{"conversationId","decision":null|{"messageId","outcome","timestamp"},"expiresAt":null|int,"messageId","sentAt","to","version":1}`
 
+- `expiresAt` is the request timestamp + `ttl`, null when `ttl` is absent.
 - The sender writes it after the `request` is delivered and before it clears the pending send.
 - The receiver of the `decision` fills `decision` when it accepts the decision, after the delivery record and before the replay state (and repairs it from delivery records on recovery).
 - A record MAY be deleted 30 days after `sentAt`.
@@ -138,7 +143,8 @@ A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md
 
 ## Security Considerations
 
-- **Delegate impersonating its principal.** The record is signed by the account's key over the subject's signing key; a delegate cannot mint one for another subject, and a record cannot be transplanted (rule 9).
-- **Relay tampering.** The profile is not covered by the registration binding signature. A relay can strip a principal (principal messages from that peer then fail closed with `wrong_principal`) but cannot forge or alter one.
+- **Delegate impersonating its principal.** The record is signed by the account's key over the subject's signing key; a delegate cannot mint one for another subject, and a record cannot be transplanted (§ Validation step 9).
+- **Relay tampering.** The profile is not covered by the registration binding signature. A relay can strip a principal (principal messages from that peer then fail closed with `wrong_principal`) but cannot forge or alter one (but can replay a withdrawn one).
+- **Withdrawal and revocation.** A record binds only the subject's signing key; it carries no registration timestamp. So (a) a compromised subject holding the key can re-register an unexpired record, and (b) a relay, which does not cover the profile with the binding signature, can re-attach a withdrawn but unexpired record. Re-registering without the principal therefore withdraws it only against honest relays; for a compromised subject, `expiresAt` is the only protocol-level revocation, which is why it is required and bounded. Verifiers MAY additionally check on-chain that `signer.publicKey` is still an authority of `account` and treat loss of authority as revocation.
 - **Key custody.** `hardwareBacking` is self-asserted and not verifiable ([01-identity.md](./01-identity.md)); the principal binding is the verifiable custody fact.
 - **Authority.** The protocol proves that `signer` signed; whether `signer` controls `account` on its chain is a MAY check for verifiers.

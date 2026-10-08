@@ -51,6 +51,16 @@ from ace.encryption import ACE_KEM_SALT, compute_conversation_id
 from ace.messages import decode_body
 from ace.registration import registration_payload
 from ace.state_machine import ThreadEvent, ThreadState
+import dataclasses
+from ace.principal import (
+    PrincipalSigner,
+    check_principal_rules,
+    create_principal_record,
+    principal_payload,
+    principal_sign_data,
+    validate_principal_record,
+)
+from ace.types import PrincipalKey, PrincipalRecord
 
 from client_vectors import client_vectors
 
@@ -60,6 +70,7 @@ _args.add_argument("--out", default=os.path.normpath(os.path.join(HERE, "..", "t
                    help="output path (default: ace-spec/test-vectors.json)")
 OUT = _args.parse_args().out
 ECONOMIC = ["rfq", "offer", "accept", "reject", "invoice", "receipt", "deliver", "confirm"]
+PRINCIPAL = ["request", "decision", "report"]
 
 
 def b64(data: bytes) -> str:
@@ -273,6 +284,10 @@ add_envelope("secp256k1 value with 0X", mutate(signature__scheme="secp256k1", si
 add_envelope("secp256k1 value uppercase hex", mutate(signature__scheme="secp256k1", signature__value="0x" + "AA" * 65), False, "invalid_envelope")
 add_envelope("secp256k1 value 129 hex digits", mutate(signature__scheme="secp256k1", signature__value=_secp_hex[:-1]), False, "invalid_envelope")
 add_envelope("top-level array", None, False, "invalid_envelope", text="[]")
+add_envelope("request without threadId", mutate(type="request"), True)
+add_envelope("decision with threadId", mutate(type="decision", threadId="t1"), True)
+add_envelope("report without threadId", mutate(type="report"), True)
+add_envelope("unknown type approve", mutate(type="approve"), False, "invalid_envelope")
 
 # =====================================================================================
 # bodies (internal decode + validate_body; the error is always invalid_body)
@@ -310,12 +325,16 @@ MINIMAL = {
     "confirm": {"deliverId": "00000000-0000-4000-8000-000000000001"},
     "info": {"message": "hi"},
     "text": {"message": "hi"},
+    "request": {"action": "pay", "summary": "Pay 1 USDC"},
+    "decision": {"requestId": "00000000-0000-4000-8000-000000000001", "outcome": "approve"},
+    "report": {"action": "pay", "summary": "paid", "outcome": "ok"},
 }
 REQUIRED = {
     "rfq": ["need"], "offer": ["price", "currency"], "accept": ["offerId"], "reject": [],
     "invoice": ["offerId", "amount", "currency", "settlementMethod"],
     "receipt": ["referenceId", "amount", "currency", "settlementMethod", "proof"],
     "deliver": ["type", "content"], "confirm": ["deliverId"], "info": ["message"], "text": ["message"],
+    "request": ["action", "summary"], "decision": ["requestId", "outcome"], "report": ["action", "summary", "outcome"],
 }
 
 
@@ -365,6 +384,47 @@ add_body("not JSON", "text", '{"message":"x"', False)
 add_body("extra fields", "text", j({"message": "x", "extra": {"nested": [1, 2.5, None, True]}}), True)
 add_body("empty required string", "text", j({"message": ""}), True)
 add_body("non-ASCII", "text", j({"message": "中文 / émoji 🚀"}), True)
+# principal message bodies (09 § Principal Messages)
+_REF = {"conversationId": "ab" * 32, "messageId": MESSAGE_ID}
+add_body("request all optionals", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": "deal-1"}, "amount": "1",
+                                               "currency": "USDC", "details": {"scheme": "exact", "payTo": "x"}, "ttl": 60}), True)
+add_body("request optional nulls", "request", j({**MINIMAL["request"], "ref": None, "amount": None, "currency": None,
+                                                "details": None, "ttl": None}), True)
+add_body("request ref without threadId", "request", j({**MINIMAL["request"], "ref": _REF}), True)
+add_body("request ref threadId null", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": None}}), True)
+add_body("request ref threadId empty", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": ""}}), False)
+add_body("request ref threadId 257 code points", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": "é" * 257}}), False)
+add_body("request ref conversationId uppercase", "request", j({**MINIMAL["request"], "ref": {**_REF, "conversationId": "AB" * 32}}), False)
+add_body("request ref messageId uppercase", "request", j({**MINIMAL["request"], "ref": {**_REF, "messageId": _REF["messageId"].upper()}}), False)
+add_body("request ref messageId UUIDv1", "request",
+         j({**MINIMAL["request"], "ref": {**_REF, "messageId": "550e8400-e29b-11d4-a716-446655440000"}}), False)
+add_body("request ref missing messageId", "request", j({**MINIMAL["request"], "ref": {"conversationId": "ab" * 32}}), False)
+add_body("request ref missing conversationId", "request", j({**MINIMAL["request"], "ref": {"messageId": _REF["messageId"]}}), False)
+add_body("request ref array", "request", j({**MINIMAL["request"], "ref": []}), False)
+add_body("request details string", "request", j({**MINIMAL["request"], "details": "x"}), False)
+add_body("request details array", "request", j({**MINIMAL["request"], "details": []}), False)
+add_body("request amount number", "request", j({**MINIMAL["request"], "amount": 1}), False)
+add_body("request ttl 1.5", "request", '{"action":"a","summary":"s","ttl":1.5}', False)
+add_body("request ttl -1", "request", '{"action":"a","summary":"s","ttl":-1}', False)
+add_body("decision outcome deny with reason and result", "decision",
+         j({**MINIMAL["decision"], "outcome": "deny", "reason": "no", "result": {"tx": "0x1"}}), True)
+add_body("decision optional nulls", "decision", j({**MINIMAL["decision"], "reason": None, "result": None}), True)
+add_body("decision outcome maybe", "decision", j({**MINIMAL["decision"], "outcome": "maybe"}), False)
+add_body("decision outcome APPROVE", "decision", j({**MINIMAL["decision"], "outcome": "APPROVE"}), False)
+add_body("decision outcome ok (report value)", "decision", j({**MINIMAL["decision"], "outcome": "ok"}), False)
+add_body("decision result array", "decision", j({**MINIMAL["decision"], "result": []}), False)
+add_body("decision result string", "decision", j({**MINIMAL["decision"], "result": "0x1"}), False)
+add_body("decision reason number", "decision", j({**MINIMAL["decision"], "reason": 1}), False)
+add_body("report outcome skipped with ref", "report", j({**MINIMAL["report"], "outcome": "skipped", "ref": _REF,
+                                                         "requestId": _REF["messageId"], "proof": {}}), True)
+add_body("report outcome failed", "report", j({**MINIMAL["report"], "outcome": "failed"}), True)
+add_body("report optional nulls", "report", j({**MINIMAL["report"], "ref": None, "requestId": None, "proof": None}), True)
+add_body("report outcome done", "report", j({**MINIMAL["report"], "outcome": "done"}), False)
+add_body("report outcome approve (decision value)", "report", j({**MINIMAL["report"], "outcome": "approve"}), False)
+add_body("report proof string", "report", j({**MINIMAL["report"], "proof": "x"}), False)
+add_body("report proof array", "report", j({**MINIMAL["report"], "proof": []}), False)
+add_body("report ref threadId empty", "report", j({**MINIMAL["report"], "ref": {**_REF, "threadId": ""}}), False)
+add_body("report requestId number", "report", j({**MINIMAL["report"], "requestId": 1}), False)
 
 # =====================================================================================
 # transitions
@@ -745,6 +805,303 @@ for agent_name, ident in (("alice", alice), ("bob", bob)):
         auth_vectors.append(entry)
 
 # =====================================================================================
+# principal (09): auth sign-data entries, record validation, same-account rules
+# =====================================================================================
+
+ACCOUNT = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+OTHER_ACCOUNT = "eip155:8453:0x7a3b00000000000000000000000000000000f91c"
+ISSUED = TIMESTAMP - 100
+EXPIRES = TIMESTAMP + 30 * 86400
+MAX_LIFETIME = 31622400  # 09 § Principal Record: expiresAt - issuedAt <= 366 days
+owner_ed = SoftwareIdentity("ed25519", seed("principal-owner-ed25519"), seed("principal-owner-ed25519-enc"))
+owner_secp = SoftwareIdentity("secp256k1", seed("principal-owner-secp256k1"), seed("principal-owner-secp256k1-enc"))
+attacker_ed = SoftwareIdentity("ed25519", seed("principal-attacker-ed25519"), seed("principal-attacker-ed25519-enc"))
+attacker_secp = SoftwareIdentity("secp256k1", seed("principal-attacker-secp256k1"), seed("principal-attacker-secp256k1-enc"))
+EIP_ACCOUNT = "eip155:8453:" + owner_secp.get_address()
+
+
+def signer(ident: SoftwareIdentity) -> PrincipalSigner:
+    return PrincipalSigner.from_identity(ident)
+
+
+def pkey(ident: SoftwareIdentity) -> PrincipalKey:
+    return PrincipalKey(ident.get_signing_scheme(), b64(ident.get_signing_public_key()))
+
+
+def pkey_json(k: PrincipalKey | None) -> dict | None:
+    return None if k is None else {"scheme": k.scheme, "publicKey": k.public_key}
+
+
+def raw_record(owner: SoftwareIdentity, subject_key: bytes, *, account=ACCOUNT, roles=("controller", "agent"),
+               issued_at=ISSUED, expires_at=EXPIRES, scope="copy:solana,hl") -> dict:
+    """Sign without validating (for records that are invalid by construction)."""
+    draft = PrincipalRecord(account=account, roles=tuple(roles), signer=pkey(owner),
+                            issued_at=issued_at, signature="", expires_at=expires_at, scope=scope)
+    sig = owner.sign(principal_sign_data(draft, subject_key))
+    return dataclasses.replace(draft, signature=encode_signature(sig, owner.get_signing_scheme())).to_dict()
+
+
+# auth: action "principal" (signer = the agent, subject = the other agent). No headers.
+for agent_name, ident, subject, scope in (("alice", alice, bob, "copy:solana,hl"), ("alice", alice, bob, None),
+                                          ("bob", bob, alice, "copy:solana,hl"), ("bob", bob, alice, None)):
+    spk = subject.get_signing_public_key()
+    rec = create_principal_record(signer(ident), subject_signing_public_key=spk, account=ACCOUNT,
+                                  roles=["controller", "agent"], scope=scope, expires_at=EXPIRES, issued_at=ISSUED)
+    validate_principal_record(rec.to_dict(), spk, TIMESTAMP)
+    payload_p = principal_payload(rec, spk)
+    sd_p = principal_sign_data(rec, spk)
+    assert sd_p == build_sign_data("principal", subject.get_ace_id(), ISSUED, payload_p)
+    assert payload_p == encode_payload(ACCOUNT, "controller,agent", rec.signer.scheme, rec.signer.public_key, b64(spk),
+                                       scope or "", str(EXPIRES))
+    entry = {
+        "action": "principal", "agent": agent_name, "timestamp": ISSUED, "now": TIMESTAMP,
+        "request": {"account": ACCOUNT, "roles": ["controller", "agent"], "signerScheme": rec.signer.scheme,
+                    "signerPublicKey": rec.signer.public_key, "subjectSigningPublicKey": b64(spk),
+                    "subjectAceId": subject.get_ace_id(), "scope": scope, "expiresAt": EXPIRES},
+        "subjectSigningPublicKey": b64(spk),
+        "payloadHex": payload_p.hex(),
+        "signDataHex": sd_p.hex(),
+        "signature": rec.signature,
+        "record": rec.to_dict(),
+    }
+    if agent_name == "bob":
+        entry["verifyOnly"] = True
+    auth_vectors.append(entry)
+assert len(auth_vectors) == 22
+
+A_SPK = alice.get_signing_public_key()
+principal_valid = []
+for name, owner, kw in (
+    ("ed25519 signer, all fields", owner_ed, {}),
+    ("secp256k1 signer, all fields", owner_secp, {}),
+    ("agent role only, no scope", owner_ed, {"roles": ("agent",), "scope": None}),
+    ("controller role only", owner_secp, {"roles": ("controller",)}),
+    ("issuedAt at now + 300", owner_ed, {"issued_at": TIMESTAMP + 300, "expires_at": TIMESTAMP + 400}),
+    ("expiresAt at now + 1", owner_ed, {"expires_at": TIMESTAMP + 1}),
+    ("lifetime exactly 31622400 seconds", owner_ed, {"expires_at": ISSUED + MAX_LIFETIME}),
+    ("scope of 256 code points", owner_ed, {"scope": "é" * 256}),
+):
+    rec_d = raw_record(owner, A_SPK, **kw)
+    r = validate_principal_record(rec_d, A_SPK, TIMESTAMP)
+    principal_valid.append({"name": name, "subjectSigningPublicKey": b64(A_SPK), "record": rec_d,
+                            "payloadHex": principal_payload(r, A_SPK).hex(), "signDataHex": principal_sign_data(r, A_SPK).hex()})
+# null optional member = absent; unknown members ignored (same signature as the base record)
+BASE = raw_record(owner_ed, A_SPK)
+for name, rec_d in (("scope null is absent", raw_record(owner_ed, A_SPK, scope=None) | {"scope": None}),
+                    ("unknown member ignored", {**BASE, "note": {"x": 1}})):
+    r = validate_principal_record(rec_d, A_SPK, TIMESTAMP)
+    principal_valid.append({"name": name, "subjectSigningPublicKey": b64(A_SPK), "record": rec_d,
+                            "payloadHex": principal_payload(r, A_SPK).hex(), "signDataHex": principal_sign_data(r, A_SPK).hex()})
+
+
+def mut(**changes) -> dict:
+    d = json.loads(json.dumps(BASE))
+    for k, v in changes.items():
+        if k == "signer_scheme":
+            d["signer"]["scheme"] = v
+        elif k == "signer_publicKey":
+            d["signer"]["publicKey"] = v
+        elif v is DELETE:
+            del d[k]
+        else:
+            d[k] = v
+    return d
+
+
+_flip = bytearray(base64.b64decode(BASE["signature"]))
+_flip[0] ^= 1
+principal_invalid_cases = [
+    ("not an object", [BASE], A_SPK),
+    ("account without account part", mut(account="solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"), A_SPK),
+    ("account namespace uppercase", mut(account="Solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:x"), A_SPK),
+    ("account not a string", mut(account=1), A_SPK),
+    ("account missing", mut(account=DELETE), A_SPK),
+    ("roles empty", mut(roles=[]), A_SPK),
+    ("roles out of canonical order", mut(roles=["agent", "controller"]), A_SPK),
+    ("roles duplicated", mut(roles=["controller", "controller"]), A_SPK),
+    ("roles agent duplicated with controller", mut(roles=["controller", "agent", "agent"]), A_SPK),
+    ("roles unknown", mut(roles=["owner"]), A_SPK),
+    ("roles uppercase", mut(roles=["Controller"]), A_SPK),
+    ("roles not an array", mut(roles="controller"), A_SPK),
+    ("signer missing", mut(signer=DELETE), A_SPK),
+    ("signer scheme unknown", mut(signer_scheme="p256"), A_SPK),
+    ("signer publicKey 31 bytes", mut(signer_publicKey=b64(bytes(31))), A_SPK),
+    ("signer publicKey non-canonical Base64", mut(signer_publicKey=BASE["signer"]["publicKey"][:-2] + "B="), A_SPK),
+    ("issuedAt string", mut(issuedAt=str(ISSUED)), A_SPK),
+    ("issuedAt 1.5", mut(issuedAt=1.5), A_SPK),
+    ("issuedAt beyond now + 300", raw_record(owner_ed, A_SPK, issued_at=TIMESTAMP + 301, expires_at=TIMESTAMP + 400), A_SPK),
+    ("expiresAt missing", mut(expiresAt=DELETE), A_SPK),
+    ("expiresAt null", mut(expiresAt=None), A_SPK),
+    ("expiresAt string", mut(expiresAt=str(EXPIRES)), A_SPK),
+    ("expiresAt equal to issuedAt", raw_record(owner_ed, A_SPK, expires_at=ISSUED), A_SPK),
+    ("expiresAt before issuedAt", raw_record(owner_ed, A_SPK, expires_at=ISSUED - 1), A_SPK),
+    ("lifetime 31622401 seconds", raw_record(owner_ed, A_SPK, expires_at=ISSUED + MAX_LIFETIME + 1), A_SPK),
+    ("expired (expiresAt == now)", raw_record(owner_ed, A_SPK, expires_at=TIMESTAMP), A_SPK),
+    ("scope empty", mut(scope=""), A_SPK),
+    ("scope 257 code points", mut(scope="é" * 257), A_SPK),
+    ("scope with a control character", mut(scope="a\u0007b"), A_SPK),
+    ("scope with U+007F", mut(scope="a\u007fb"), A_SPK),
+    ("scope not a string", mut(scope=1), A_SPK),
+    ("scope changed after signing", mut(scope="copy:solana"), A_SPK),
+    ("scope removed after signing", mut(scope=DELETE), A_SPK),
+    ("expiresAt changed after signing", mut(expiresAt=EXPIRES + 1), A_SPK),
+    ("roles changed after signing", mut(roles=["controller"]), A_SPK),
+    ("account changed after signing", mut(account=OTHER_ACCOUNT), A_SPK),
+    ("signature missing", mut(signature=DELETE), A_SPK),
+    ("signature in the secp256k1 encoding", mut(signature="0x" + "11" * 65), A_SPK),
+    ("signature byte flipped", mut(signature=b64(bytes(_flip))), A_SPK),
+    ("subject mismatch", BASE, bob.get_signing_public_key()),
+]
+principal_invalid = []
+for name, rec_d, subject_key in principal_invalid_cases:
+    expect_error(lambda: validate_principal_record(json.loads(json.dumps(rec_d)), subject_key, TIMESTAMP), "invalid_principal")
+    principal_invalid.append({"name": name, "subjectSigningPublicKey": b64(subject_key), "record": rec_d,
+                              "now": TIMESTAMP, "error": "invalid_principal"})
+principal_section = {
+    "rules": "validatePrincipalRecord(record, base64decode(subjectSigningPublicKey), now) for every entry (valid "
+             "entries use this section's now). Valid entries also reproduce payloadHex / signDataHex "
+             "(09 § Signing Context); invalid entries fail with invalid_principal. "
+             "vectors.auth also holds entries with action == \"principal\": they carry no headers, so header "
+             "runners skip them; a principal runner checks payloadHex = encodePayload(request.account, "
+             "join(request.roles, \",\"), request.signerScheme, request.signerPublicKey, "
+             "request.subjectSigningPublicKey, request.scope or \"\", decimal(request.expiresAt)), "
+             "signDataHex = buildSignData(\"principal\", request.subjectAceId, timestamp, payload), "
+             "validatePrincipalRecord(record, subjectSigningPublicKey, now) succeeds, and (unless verifyOnly) "
+             "createPrincipalRecord with the agent's signing key, issuedAt = timestamp reproduces record exactly.",
+    "account": ACCOUNT, "now": TIMESTAMP, "valid": principal_valid, "invalid": principal_invalid,
+}
+
+# principalRules: the receiver is configured per case; senders are identities with a pinned principal.
+sender_ids = {
+    "controller": SoftwareIdentity("ed25519", seed("pr-controller"), seed("pr-controller-enc")),
+    "controller2": SoftwareIdentity("secp256k1", seed("pr-controller2"), seed("pr-controller2-enc")),
+    "agent": SoftwareIdentity("secp256k1", seed("pr-agent"), seed("pr-agent-enc")),
+    "otherAccount": SoftwareIdentity("ed25519", seed("pr-other"), seed("pr-other-enc")),
+    "expired": SoftwareIdentity("ed25519", seed("pr-expired"), seed("pr-expired-enc")),
+    "noPrincipal": SoftwareIdentity("ed25519", seed("pr-none"), seed("pr-none-enc")),
+    "foreignSubject": SoftwareIdentity("ed25519", seed("pr-foreign"), seed("pr-foreign-enc")),
+    "forgedSigner": SoftwareIdentity("ed25519", seed("pr-forged"), seed("pr-forged-enc")),
+    "trustedSigner": SoftwareIdentity("ed25519", seed("pr-trusted"), seed("pr-trusted-enc")),
+    "eipAgent": SoftwareIdentity("ed25519", seed("pr-eip-agent"), seed("pr-eip-agent-enc")),
+    "eipWrongAddress": SoftwareIdentity("ed25519", seed("pr-eip-wrong"), seed("pr-eip-wrong-enc")),
+    "eipEd25519Signer": SoftwareIdentity("ed25519", seed("pr-eip-ed"), seed("pr-eip-ed-enc")),
+}
+_spk = {k: v.get_signing_public_key() for k, v in sender_ids.items()}
+senders = {
+    "controller": raw_record(owner_ed, _spk["controller"], roles=("controller",)),
+    "controller2": raw_record(owner_ed, _spk["controller2"], roles=("controller",)),
+    "agent": raw_record(owner_ed, _spk["agent"], roles=("agent",)),
+    "otherAccount": raw_record(owner_ed, _spk["otherAccount"], account=OTHER_ACCOUNT),
+    "expired": raw_record(owner_ed, _spk["expired"], expires_at=TIMESTAMP),
+    "noPrincipal": None,
+    "foreignSubject": raw_record(owner_ed, _spk["controller"]),  # issued for the controller's key
+    "forgedSigner": raw_record(attacker_ed, _spk["forgedSigner"]),  # same account string, untrusted signer
+    "trustedSigner": raw_record(owner_secp, _spk["trustedSigner"]),
+    "eipAgent": raw_record(owner_secp, _spk["eipAgent"], account=EIP_ACCOUNT, roles=("agent",)),
+    "eipWrongAddress": raw_record(attacker_secp, _spk["eipWrongAddress"], account=EIP_ACCOUNT, roles=("agent",)),
+    "eipEd25519Signer": raw_record(owner_ed, _spk["eipEd25519Signer"], account=EIP_ACCOUNT, roles=("agent",)),
+}
+SELF_SIGNER = pkey(owner_ed)
+CTRL = sender_ids["controller"].get_ace_id()
+RQ = "00000000-0000-4000-8000-000000000101"
+RQ2 = "00000000-0000-4000-8000-000000000102"
+REQ = {"action": "pay", "summary": "Pay 1 USDC", "details": {"payTo": "x"}}
+REP = {"action": "x402.pay", "summary": "settled", "outcome": "ok", "proof": {"txHash": "0x1"}}
+
+
+def dec(rid: str, outcome: str = "approve") -> dict:
+    return {"requestId": rid, "outcome": outcome}
+
+
+def recv(account=ACCOUNT, self_signer=SELF_SIGNER, trusted=()) -> dict:
+    return {"selfAccount": account, "selfSigner": self_signer, "trustedSigners": list(trusted)}
+
+
+OPEN = {RQ: {"to": CTRL, "expiresAt": None}}
+WP, BR = "error:wrong_principal", "error:bad_reference"
+rule_cases_spec = [
+    # (name, receiver, openRequests, steps)
+    ("request from a same-account agent (same signer)", recv(), {}, [("agent", "request", REQ, "ok")]),
+    ("report from a same-account agent", recv(), {}, [("agent", "report", REP, "ok")]),
+    ("report from a same-account controller (either direction)", recv(), {}, [("controller", "report", REP, "ok")]),
+    ("request from a controller (no role check)", recv(), {}, [("controller", "request", REQ, "ok")]),
+    ("receiver without principal", recv(account=None), {}, [("agent", "request", REQ, WP)]),
+    ("sender without principal", recv(), {}, [("noPrincipal", "request", REQ, WP)]),
+    ("sender principal expired", recv(), {}, [("expired", "report", REP, WP)]),
+    ("sender principal issued for another subject", recv(), {}, [("foreignSubject", "request", REQ, WP)]),
+    ("signer binding: same account string, untrusted signer", recv(), {}, [("forgedSigner", "request", REQ, WP)]),
+    ("signer binding: no selfSigner fails closed", recv(self_signer=None), {}, [("agent", "request", REQ, WP)]),
+    ("signer binding: trusted-signer set", recv(trusted=[pkey(owner_secp)]), {}, [("trustedSigner", "request", REQ, "ok")]),
+    ("signer binding: signer outside the trusted-signer set", recv(trusted=[pkey(attacker_secp)]), {},
+     [("trustedSigner", "request", REQ, WP)]),
+    ("signer binding: eip155 address derivation", recv(account=EIP_ACCOUNT, self_signer=None), {},
+     [("eipAgent", "request", REQ, "ok")]),
+    ("signer binding: eip155 address mismatch", recv(account=EIP_ACCOUNT, self_signer=None), {},
+     [("eipWrongAddress", "request", REQ, WP)]),
+    ("signer binding: eip155 with an ed25519 signer", recv(account=EIP_ACCOUNT, self_signer=None), {},
+     [("eipEd25519Signer", "request", REQ, WP)]),
+    ("sender of another account", recv(), {}, [("otherAccount", "request", REQ, WP)]),
+    ("decision from the request's controller", recv(), OPEN, [("controller", "decision", dec(RQ), "ok")]),
+    ("decision from a non-controller", recv(), OPEN, [("agent", "decision", dec(RQ), WP)]),
+    ("role check precedes the request check", recv(), OPEN,
+     [("agent", "decision", dec("00000000-0000-4000-8000-000000000999"), WP)]),
+    ("decision referencing no request", recv(), OPEN,
+     [("controller", "decision", dec("00000000-0000-4000-8000-000000000999"), BR)]),
+    ("decision for an expired request", recv(), {RQ: {"to": CTRL, "expiresAt": TIMESTAMP - 1}},
+     [("controller", "decision", dec(RQ), BR)]),
+    ("decision at the request's expiry second", recv(), {RQ: {"to": CTRL, "expiresAt": TIMESTAMP}},
+     [("controller", "decision", dec(RQ), "ok")]),
+    ("second decision for the same request", recv(), OPEN,
+     [("controller", "decision", {**dec(RQ), "result": {"x402": "payload"}}, "ok"),
+      ("controller", "decision", dec(RQ, "deny"), BR)]),
+    ("decision from a controller the request was not sent to", recv(), OPEN,
+     [("controller2", "decision", dec(RQ), WP), ("controller", "decision", dec(RQ, "deny"), "ok")]),
+    ("decisions for two open requests", recv(), {**OPEN, RQ2: {"to": sender_ids["controller2"].get_ace_id(), "expiresAt": None}},
+     [("controller2", "decision", dec(RQ2), "ok"), ("controller", "decision", dec(RQ), "ok"),
+      ("controller2", "decision", dec(RQ2, "deny"), BR)]),
+    ("decision to a receiver without principal", recv(account=None), OPEN, [("controller", "decision", dec(RQ), WP)]),
+]
+rule_cases = []
+for name, receiver, open_map, steps in rule_cases_spec:
+    open_ = dict(open_map)
+    out_steps = []
+    for sname, t, body, expect in steps:
+        def to_of(c: str, r: str, now: int, open_=open_) -> str | None:
+            e = open_.get(r) if c == conversation_id else None
+            return None if e is None or (e["expiresAt"] is not None and now > e["expiresAt"]) else e["to"]
+
+        def go(sname=sname, t=t, body=body):
+            decode_body(t, j(body).encode())
+            check_principal_rules(t, body, conversation_id=conversation_id, sender_principal=senders[sname],
+                                  sender_signing_public_key=_spk[sname], self_account=receiver["selfAccount"],
+                                  open_request_to=to_of, now=TIMESTAMP, self_signer=receiver["selfSigner"],
+                                  trusted_signers=frozenset(receiver["trustedSigners"]))
+            return "ok"
+        got = outcome(go)
+        assert got == expect, f"principalRules {name}: expected {expect}, got {got}"
+        if got == "ok" and t == "decision":
+            del open_[body["requestId"]]
+        out_steps.append({"sender": sname, "type": t, "body": body, "expect": expect})
+    rule_cases.append({"name": name, "now": TIMESTAMP, "selfAccount": receiver["selfAccount"],
+                       "selfSigner": pkey_json(receiver["selfSigner"]),
+                       "trustedSigners": [pkey_json(k) for k in receiver["trustedSigners"]],
+                       "openRequests": open_map, "steps": out_steps})
+principal_rules = {
+    "rules": "09 § Same-Account Rules. For each case keep a map of open requests (initially openRequests: "
+             "requestId -> {to, expiresAt}). For each step call checkPrincipalRules(type, body, conversationId, "
+             "senders[sender].principal, base64decode(senders[sender].signingPublicKey), selfAccount, "
+             "openRequestTo, now, selfSigner, trustedSigners), where openRequestTo(c, r, now) returns open[r].to when "
+             "c == conversationId, r is in the map and (expiresAt is null or now <= expiresAt), else null. "
+             "'ok' = no error; an accepted decision removes body.requestId from the map. selfAccount null = the "
+             "receiver has no principal; selfSigner null and trustedSigners [] = no authority keys besides eip155 "
+             "address derivation. Every body passes validateBody.",
+    "now": TIMESTAMP, "conversationId": conversation_id, "account": ACCOUNT,
+    "senders": {k: {"aceId": sender_ids[k].get_ace_id(), "signingPublicKey": b64(_spk[k]), "principal": senders[k]}
+                for k in sender_ids},
+    "cases": rule_cases,
+}
+
+# =====================================================================================
 # registrations
 # =====================================================================================
 
@@ -766,6 +1123,37 @@ for name, ident in (("alice", alice), ("bob", bob)):
         assert verified.request_digest == hashlib.sha256(sd).hexdigest()
         registration_vectors.append({"agent": name, "mode": mode, "now": TIMESTAMP, "request": request,
                                      "signDataHex": sd.hex(), "requestDigest": verified.request_digest})
+
+
+def payload_fields(payload: bytes) -> list[bytes]:
+    """Split an encodePayload byte string (four-byte big-endian length prefixes)."""
+    out, i = [], 0
+    while i < len(payload):
+        n = int.from_bytes(payload[i:i + 4], "big")
+        out.append(payload[i + 4:i + 4 + n])
+        i += 4 + n
+    assert i == len(payload)
+    return out
+
+
+# 02 § Registration authorization: replace = 4 + 19 fields; principal group absent -> "absent" + 8 empty strings.
+_pa = payload_fields(registration_payload(b64(alice.get_encryption_public_key()), b64(A_SPK), "ed25519", PROFILE))
+assert len(_pa) == 4 + 19 and _pa[3] == b"replace" and _pa[-9] == b"absent" and _pa[-8:] == [b""] * 8
+PRINCIPAL_P = raw_record(owner_ed, A_SPK)
+PROFILE_P = dataclasses.replace(PROFILE, principal=PrincipalRecord.from_dict(PRINCIPAL_P))
+_req_p = create_registration_request(alice, PROFILE_P, timestamp=TIMESTAMP)
+assert _req_p["profile"]["principal"] == PRINCIPAL_P
+_payload_p = registration_payload(_req_p["encryptionPublicKey"], _req_p["signingPublicKey"], _req_p["scheme"], PROFILE_P)
+_pp = payload_fields(_payload_p)
+assert len(_pp) == 4 + 19 and _pp[-9:] == [b"present", PRINCIPAL_P["account"].encode(), b"controller,agent",
+                                            b"ed25519", PRINCIPAL_P["signer"]["publicKey"].encode(),
+                                            str(ISSUED).encode(), str(EXPIRES).encode(), b"copy:solana,hl",
+                                            PRINCIPAL_P["signature"].encode()]
+_sd_p = build_sign_data("register-request", _req_p["aceId"], TIMESTAMP, _payload_p)
+_ver_p = verify_registration_request(json.loads(json.dumps(_req_p)), clock=lambda: TIMESTAMP)
+assert _ver_p.request_digest == hashlib.sha256(_sd_p).hexdigest() and _ver_p.peer.principal is not None
+registration_vectors.append({"agent": "alice", "mode": "replace-principal", "now": TIMESTAMP, "request": _req_p,
+                             "signDataHex": _sd_p.hex(), "requestDigest": _ver_p.request_digest})
 
 
 def manual_request(ident: SoftwareIdentity, *, enc: bytes | None = None, ts: int = TIMESTAMP, profile=_KEEP,
@@ -798,6 +1186,19 @@ registration_errors = [
      TIMESTAMP, "invalid_profile"),
     ("binding signature over another timestamp", manual_request(bob, binding_ts=TIMESTAMP - 1), TIMESTAMP, "invalid_signature"),
     ("authorization for another mutation", manual_request(bob, profile=None, auth_profile=_KEEP), TIMESTAMP, "invalid_authorization"),
+    ("profile principal issued for another subject",
+     manual_request(alice, profile={"name": "A", "principal": raw_record(owner_ed, bob.get_signing_public_key())}),
+     TIMESTAMP, "invalid_principal"),
+    ("profile principal with roles out of order",
+     manual_request(alice, profile={"name": "A", "principal": {**raw_record(owner_ed, A_SPK), "roles": ["agent", "controller"]}}),
+     TIMESTAMP, "invalid_principal"),
+    ("profile principal expired",
+     manual_request(alice, profile={"name": "A", "principal": raw_record(owner_ed, A_SPK, expires_at=TIMESTAMP)}),
+     TIMESTAMP, "invalid_principal"),
+    ("profile principal without expiresAt",
+     manual_request(alice, profile={"name": "A", "principal": {k: v for k, v in raw_record(owner_ed, A_SPK).items()
+                                                               if k != "expiresAt"}}, auth_profile=None),
+     TIMESTAMP, "invalid_principal"),
 ]
 verify_registration_request(_r, clock=lambda: TIMESTAMP + 300)  # the window bound is inclusive
 registration_error_vectors = []
@@ -943,7 +1344,7 @@ peer_binding = [
 # =====================================================================================
 
 vectors = {
-    "version": "3",
+    "version": "4",
     "agents": {"alice": agent_json(alice), "bob": agent_json(bob)},
     "xwing": XWING_VECTORS,
     "vectors": {
@@ -972,6 +1373,8 @@ vectors = {
         "urls": url_vectors,
         "base64": base64_vectors,
         "peerBinding": peer_binding,
+        "principal": principal_section,
+        "principalRules": principal_rules,
         **client_vectors(),
     },
 }
@@ -983,6 +1386,7 @@ with open(OUT, "w", encoding="utf-8") as f:
 print(f"Generated {OUT}")
 for section in ("envelopes", "bodies", "replay", "auth", "registrations", "registrationErrors", "urls", "base64", "peerBinding"):
     print(f"  {section}: {len(vectors['vectors'][section])}")
+print(f"  principal: {len(principal_valid)} valid, {len(principal_invalid)} invalid; principalRules: {len(rule_cases)} cases")
 print(f"  transitions: {len(cases)} cases, matrix {len(matrix)}x{len(ECONOMIC)}x2")
 for section in ("webhooks", "relayUrls", "blockedAddresses", "relayErrors", "directReceive"):
     print(f"  {section}: {len(vectors['vectors'][section]['cases'])}")

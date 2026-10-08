@@ -179,7 +179,7 @@ Rejections:
 - A replay is a duplicate: nothing is written.
 - A direct-sourced message is unauthenticated until verified; its rejections are not
   persisted. Direct delivery additionally requires `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`.
-- A local failure (storage, unavailable key hardware) is retryable: the tentative replay
+- A transient failure (relay unreachable, timeout) or local failure (storage, unavailable key hardware) is retryable: the tentative replay
   state is discarded, including horizons.
 
 The relay cursor advances past delivered, duplicate and quarantined entries, and stops
@@ -318,14 +318,14 @@ The ACE SDKs persist pipeline state in a key-value store with these keys, so tha
 | `replay.json` | `{"entries":[[messageId,from,timestamp],…],"horizon":H,"senderHorizons":{from:H[from]},"version":1}`; entries in seen-store order |
 | `cursors.json` | `{"cursors":{"<normalized relay URL, 08-relay.md § Client Rules>":"<ms>-<seq>"},"version":1}` |
 | `threads/<sha256(conversationId ‖ 0x00 ‖ threadId)>.json` | `{"conversationId","history":[{"from","messageId","timestamp","type"}],"localAceId","peerAceId","pending":null\|PendingSend,"state","threadId","version":1}` |
-| `outbox/<sha256(requestId)>.json` | `{"message":Envelope,"requestId","stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends) |
+| `outbox/<sha256(requestId)>.json` | `{"message":Envelope,"requestId","requestTtl"?:int,"stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends; `requestTtl` is optional and omitted when absent, see `PendingSend` below) |
 | `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","source":"relay"\|"direct","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
 | `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","source":"relay","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
 | `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` | `{"conversationId","decision":null\|{"messageId","outcome","timestamp"},"expiresAt":null\|int,"messageId","sentAt","to","version":1}`; written by the Outbox after a `request` is delivered (before the pending send is cleared); `decision` filled when the Inbox accepts a `decision` for it ([09-principal.md](./09-principal.md) § Persistence). Deletable 30 days after `sentAt` |
 | `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load; the cached principal is stored as `profile.principal` whatever the source (relay profile or registration-file top-level `principal`), pinned with the profile and re-verified on load with `fetchedAt` as the time |
 | `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}`; `name` matches `^[a-z0-9][a-z0-9_-]{0,63}$` |
 
-- `PendingSend` is `{"message":Envelope,"requestId","stagedAt","status"}`; inside a thread record it has no `version`. A thread has at most one pending send.
+- `PendingSend` is `{"message":Envelope,"requestId","requestTtl"?,"stagedAt","status"}`. `requestTtl` is an optional wire integer, present only for a pending `request` whose body carried `ttl`; a retry uses it to compute the `requests/` record's `expiresAt`, because the body is encrypted to the recipient and the sender cannot re-read it. The member is omitted when absent, so canonical JSON stays valid. Inside a thread record it has no `version`. A thread has at most one pending send.
 - `ThreadSnapshot` is the thread record without `pending` and `version`.
 - Envelopes use the wire shape. Timestamps are Unix seconds.
 - A delivery record whose status is `acked` is deleted once its timestamp is covered by `H` or `H[from]`. Terminal threads with no pending send are deleted after the 30-day retention ([04-messages.md](./04-messages.md) § Implementation Requirements).

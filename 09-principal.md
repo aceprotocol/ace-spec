@@ -120,7 +120,7 @@ A principal message is accepted only if, in this order (first failure wins):
 6. `decision` only: `"controller" ∈ P_from.roles` → else `wrong_principal`.
 7. `decision` only: `requestId` is the `messageId` of a `request` the receiver sent in the same `conversationId`, and no `decision` for it has been accepted, and the request is not expired at receipt → else `bad_reference`; and the `decision` sender's ACE ID MUST equal the referenced `requests/` record's `to`; otherwise `wrong_principal`.
 
-**SDK note.** The host supplies `principal.selfSigner` (defaults to the signer of the host's own record) and `principal.trustedSigners` (default empty) when opening the Inbox. Relays do not and cannot perform the step 4 check.
+**SDK note.** The host supplies `principal.selfSigner` (defaults to the signer of the host's own record) and `principal.trustedSigners` (default empty) when opening the Inbox. Relays do not and cannot perform the step 4 check. Before rejecting a principal-type message with `wrong_principal` because the sender's pinned profile has no valid principal or names another account, an SDK refreshes that peer's record from its relay once ([02-discovery.md](./02-discovery.md) § Rollback Barrier governs what the refresh may replace) and evaluates the rules again. At most one refresh per message. If the refresh fails with a transient error (relay unreachable, timeout), the message is a retryable failure and stays at the cursor; it MUST NOT be quarantined. Only a completed refresh that still fails the rules yields `wrong_principal`.
 
 `request` and `report` have no role check. An accepted `decision` marks its request decided; a request has at most one accepted decision. A failed check changes nothing.
 

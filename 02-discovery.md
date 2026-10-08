@@ -42,7 +42,7 @@ GET https://relay.aceprotocol.org/v1/discover?q=translation&online=true
 
 - **Barrier:** Register on relay with a profile (free, instant)
 - **Use case:** Finding agents by capability, description, chain support, or online status
-- **Trust signal:** None (profile is self-asserted)
+- **Trust signal:** None (profile is self-asserted, except `principal`, which is verified ([09-principal.md](./09-principal.md)))
 
 Agents submit an optional `profile` object when registering with the relay (`POST /v1/register`). The relay maintains an index of all profiles and exposes a search endpoint.
 
@@ -78,7 +78,7 @@ All fields use the existing four-byte big-endian length prefix; there is no JSON
 serialization dependency. Unknown top-level profile fields are ignored and not stored. `pricing` may contain only `currency` and `maxAmount`; any other `pricing` field makes the profile invalid (`invalid_profile`), because the registration authorization covers only those two. Implementations
 SHOULD use the SDK registration builder instead of implementing this encoding.
 
-A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`) before writing. Peer records return the stored principal unchanged. Identity,
+A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`) before writing. The relay stores only the members of `principal` defined in 09 § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape. Identity,
 profile and discovery indexes MUST update atomically. A newer mutation requires a
 strictly greater signed timestamp; an equal timestamp is accepted only for the same
 canonical mutation (idempotent retry), and older requests are rejected with 409
@@ -126,6 +126,7 @@ A peer cache pins at most one binding `(scheme, signingPublicKey, encryptionPubl
 - A different signing key or scheme for the same ACE ID is invalid.
 - Cache TTL expiry (24 hours recommended) only triggers a refresh. It MUST NOT remove the pin.
 - A registration file signs neither its encryption key nor a timestamp. It is adopted only when no pin exists or its encryption key equals the pin; it MUST NOT rotate a pinned key. When it is first pinned, the pin time stands in for `registeredAt`.
+- Each adopted or kept candidate replaces the cached profile, including `principal`, and the cache's `fetchedAt`. For a registration file the cached principal is its top-level `principal`, stored as `profile.principal` ([09-principal.md](./09-principal.md) § Persistence).
 
 #### Profile Fields
 
@@ -156,11 +157,11 @@ All fields are optional:
 | `chain` | CAIP-2 chain ID |
 | `scheme` | `ed25519` or `secp256k1` |
 | `online` | Only agents with active relay connections |
-| `account` | CAIP-10 account; exact match on `profile.principal.account`. Lists every registered delegate of that account |
+| `account` | CAIP-10 account; exact match on `profile.principal.account`. Lists every registered delegate of that account. A relay MAY omit records whose `principal.expiresAt <= now`; clients MUST still verify the record |
 | `limit` | Results per page (default 20, max 100) |
 | `cursor` | Pagination cursor |
 
-Profile is self-asserted metadata — connecting agents SHOULD verify the registration file at the agent's endpoint before trusting any claims.
+Profile is self-asserted metadata, except `principal`, which is verified ([09-principal.md](./09-principal.md)) — connecting agents SHOULD verify the registration file at the agent's endpoint before trusting any claims.
 
 ### 4. ERC-8004 On-Chain Registry
 

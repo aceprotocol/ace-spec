@@ -9,7 +9,7 @@ ACE follows two core security principles:
 
 ## Message Processing Pipeline
 
-Receivers MUST process ALL messages (economic, system, and social) through this pipeline in order. A failure at any step causes the message to be rejected; the first failure determines the error code. The sender identity (ACE ID, scheme, signing key, encryption key) comes from a verified peer binding ([02-discovery.md](./02-discovery.md) § Rollback Barrier), never from the envelope itself.
+Receivers MUST process ALL messages (economic, system, social and principal) through this pipeline in order. A failure at any step causes the message to be rejected; the first failure determines the error code. The sender identity (ACE ID, scheme, signing key, encryption key) comes from a verified peer binding ([02-discovery.md](./02-discovery.md) § Rollback Barrier), never from the envelope itself.
 
 ```
 1. Envelope Validation
@@ -58,8 +58,8 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
    → rejected and confirmed are terminal — reject all economic messages
    → Principal types: apply 09-principal.md § Same-Account Rules
                      (wrong_principal | bad_reference)
-   → An accepted decision marks its request decided (same commit as the
-     delivery record, § Durable Delivery)
+   → An accepted decision marks its request decided after the
+     delivery record and before the replay state (§ Durable Delivery)
 
 Note: On the **sender side**, the state machine uses a two-phase pattern:
   (a) Pre-check: verify the transition would be valid (fail fast)
@@ -158,6 +158,7 @@ begins:
 
 1. Write the delivery record (the parsed message and the resulting thread snapshot). This is
    the commit point: a failure here leaves no trace and the message is retried.
+1a. If the message is a `decision`, update the referenced `requests/` record (`decision` filled); if it is a `request`, nothing (requests are written by the sender).
 2. Write the thread state.
 3. Write the replay state (the tentative seen store that includes this message).
 4. Hand the message to the application.
@@ -193,6 +194,8 @@ acknowledgement, or when a later inbound message on the thread proves delivery. 
 envelope that the relay rejects as expired (`envelope_expired`) MAY be re-signed with the
 same `messageId` and a fresh timestamp; the thread entry it produced is rebuilt with the new
 timestamp.
+
+A `request` whose transport succeeded is recorded in `requests/` ([09-principal.md](./09-principal.md) § Persistence) before the pending envelope is cleared; a crash in between leaves the send pending, and the retry writes the record.
 
 ## Signature Verification
 
@@ -319,7 +322,7 @@ The ACE SDKs persist pipeline state in a key-value store with these keys, so tha
 | `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","source":"relay"\|"direct","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
 | `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","source":"relay","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
 | `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` | `{"conversationId","decision":null\|{"messageId","outcome","timestamp"},"expiresAt":null\|int,"messageId","sentAt","to","version":1}`; written by the Outbox after a `request` is delivered (before the pending send is cleared); `decision` filled when the Inbox accepts a `decision` for it ([09-principal.md](./09-principal.md) § Persistence). Deletable 30 days after `sentAt` |
-| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load; `profile.principal` is pinned with the profile and re-verified on load with `fetchedAt` as the time |
+| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load; the cached principal is stored as `profile.principal` whatever the source (relay profile or registration-file top-level `principal`), pinned with the profile and re-verified on load with `fetchedAt` as the time |
 | `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}`; `name` matches `^[a-z0-9][a-z0-9_-]{0,63}$` |
 
 - `PendingSend` is `{"message":Envelope,"requestId","stagedAt","status"}`; inside a thread record it has no `version`. A thread has at most one pending send.

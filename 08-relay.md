@@ -47,7 +47,7 @@ Header names are case-insensitive. A client uses `timestamp = max(now, lastTimes
 
 ## Registration
 
-The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-discovery.md) § Registration authorization, in this order: schema (`invalid_registration`), freshness (`stale_timestamp`), `aceId` equals the signing-key hash (`invalid_registration`), encryption key of 1216 bytes (`invalid_key`), profile (`invalid_profile`), profile principal (`invalid_principal`, [09-principal.md](./09-principal.md) § Validation), binding `signature` (`invalid_signature`), `authorization` (`invalid_authorization`). The response `status` is:
+The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-discovery.md) § Registration authorization, in this order: schema (`invalid_registration`), freshness (`stale_timestamp`), `aceId` equals the signing-key hash (`invalid_registration`), encryption key of 1216 bytes (`invalid_key`), profile (`invalid_profile`), profile principal (`invalid_principal`, [09-principal.md](./09-principal.md) § Validation; a `principal` member of any shape is checked only by 09 § Validation (`invalid_principal`), never by § Profile Fields (`invalid_profile`)), binding `signature` (`invalid_signature`), `authorization` (`invalid_authorization`). The response `status` is:
 
 | Status | Meaning |
 |--------|---------|
@@ -56,7 +56,7 @@ The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-
 | `refreshed` | Newer timestamp, same encryption key |
 | `rotated` | Newer timestamp, different encryption key |
 
-An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`). The `principal` member is stored and served exactly as validated.
+An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`). The relay stores only the members of `principal` defined in [09-principal.md](./09-principal.md) § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape.
 
 `POST /v1/unregister` removes the identity and profile and closes the caller's listen streams. Its auth timestamp MUST be strictly greater than the stored registration timestamp, else 409 `identity_conflict`. The relay retains it as a timestamp barrier so an older registration request cannot resurrect the identity.
 

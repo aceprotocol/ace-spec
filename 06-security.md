@@ -49,13 +49,17 @@ Receivers MUST process ALL messages (economic, system, and social) through this 
    → Apply 04-messages.md § Body Rules                 (invalid_body)
    → Reject malformed bodies (defense in depth)
 
-7. State Machine Validation (economic messages only)
-   → Apply 04-messages.md § Check Order: party check, transition, role
-     check, reference positions (§ References), bounds
+7. State and Principal Validation
+   → Economic types: apply 04-messages.md § Check Order: party check, transition,
+     role check, reference positions (§ References), bounds
                      (wrong_party | transition_not_allowed | wrong_role |
                       bad_reference | limit_exceeded)
    → Apply state transition atomically
    → rejected and confirmed are terminal — reject all economic messages
+   → Principal types: apply 09-principal.md § Same-Account Rules
+                     (wrong_principal | bad_reference)
+   → An accepted decision marks its request decided (same commit as the
+     delivery record, § Durable Delivery)
 
 Note: On the **sender side**, the state machine uses a two-phase pattern:
   (a) Pre-check: verify the transition would be valid (fail fast)
@@ -240,6 +244,7 @@ Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) �
 | Seen-store flooding by one sender | Per-sender quota and per-sender horizons |
 | Message transplant | conversationId as AAD in encryption, recomputed from verified keys |
 | Impersonation | Signature tied to registered signing key; `from` and scheme bound to the verified peer |
+| Delegate impersonating its principal | Principal attestation signed by the account key over the subject key + same-account rule (09-principal.md) |
 | Encryption-key rollback | Rollback barrier on signed `registeredAt` |
 | Sender state compromise | Nothing recoverable: encapsulation randomness and shared secrets are destroyed after use |
 | State-skipping (e.g., invoice without accept) | Mandatory state machine per (conversationId, threadId) |
@@ -275,7 +280,7 @@ An SDK reports every failure as one error type carrying a `code`. The `category`
 
 | Category | Codes |
 |----------|-------|
-| `permanent` | `invalid_argument`, `invalid_envelope`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `scheme_mismatch`, `stale_timestamp`, `replay`, `decryption_failed`, `invalid_body`, `transition_not_allowed`, `wrong_role`, `wrong_party`, `bad_reference`, `limit_exceeded`, `invalid_key`, `invalid_registration`, `invalid_profile`, `invalid_peer`, `stale_peer_binding`, `unknown_peer`, `not_registered`, `relay_rejected`, `envelope_expired`, `pending_send_conflict`, `blocked_address`, `direct_rejected` |
+| `permanent` | `invalid_argument`, `invalid_envelope`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `scheme_mismatch`, `stale_timestamp`, `replay`, `decryption_failed`, `invalid_body`, `transition_not_allowed`, `wrong_role`, `wrong_party`, `bad_reference`, `limit_exceeded`, `invalid_key`, `invalid_registration`, `invalid_profile`, `invalid_peer`, `invalid_principal`, `wrong_principal`, `stale_peer_binding`, `unknown_peer`, `not_registered`, `relay_rejected`, `envelope_expired`, `pending_send_conflict`, `blocked_address`, `direct_rejected` |
 | `transient` | `relay_unavailable`, `relay_protocol_error`, `fetch_failed`, `direct_unavailable` |
 | `local` | `storage_failed`, `identity_unavailable`, `handler_failed`, `receiver_busy`, `lock_busy` |
 
@@ -291,7 +296,7 @@ An SDK reports every failure as one error type carrying a `code`. The `category`
 - [ ] Signature verification before decryption, with strict scheme rules
 - [ ] Timestamp freshness enforcement
 - [ ] Schema validation on both send and receive
-- [ ] State machine with parties, roles and reference positions (send and receive sides)
+- [ ] State machine with parties, roles and reference positions (send and receive sides); principal same-account rules (09)
 - [ ] Durable delivery in the normative commit order
 - [ ] X-Wing conformance against the draft test vectors (`test-vectors.json` → `xwing`)
 - [ ] Constant-time cryptographic comparisons
@@ -313,7 +318,8 @@ The ACE SDKs persist pipeline state in a key-value store with these keys, so tha
 | `outbox/<sha256(requestId)>.json` | `{"message":Envelope,"requestId","stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends) |
 | `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","source":"relay"\|"direct","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
 | `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","source":"relay","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
-| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load |
+| `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` | `{"conversationId","decision":null\|{"messageId","outcome","timestamp"},"expiresAt":null\|int,"messageId","sentAt","to","version":1}`; written by the Outbox after a `request` is delivered (before the pending send is cleared); `decision` filled when the Inbox accepts a `decision` for it ([09-principal.md](./09-principal.md) § Persistence). Deletable 30 days after `sentAt` |
+| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load; `profile.principal` is pinned with the profile and re-verified on load with `fetchedAt` as the time |
 | `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}`; `name` matches `^[a-z0-9][a-z0-9_-]{0,63}$` |
 
 - `PendingSend` is `{"message":Envelope,"requestId","stagedAt","status"}`; inside a thread record it has no `version`. A thread has at most one pending send.

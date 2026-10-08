@@ -64,18 +64,21 @@ A request has two domain-separated signatures:
 
 `registrationPayload` is `encodePayload(encryptionPublicKey, signingPublicKey, scheme, mode, ...fields)`.
 `mode` is `keep` for omitted profile, `remove` for null, or `replace` for an object.
-Only `replace` appends these ten fields, in order:
+Only `replace` appends fields, in this order:
 
 1. `name`, `description`, `image` (missing strings become empty).
 2. `encodePayload(...tags)`, `encodePayload(...capabilities)`, `encodePayload(...chains)` (missing arrays become empty; order is significant).
 3. `endpoint` (missing becomes empty).
 4. `present` if pricing exists, otherwise `absent`; then `pricing.currency` and `pricing.maxAmount` (missing strings become empty).
+5. `present` if `principal` exists, otherwise `absent`; then `principal.account`, `join(principal.roles, ",")`, `principal.signer.scheme`, `principal.signer.publicKey`, `decimal(principal.issuedAt)`, `decimal(expiresAtOr0)` (`decimal(principal.expiresAt)`; 0 never occurs for a valid record), `principal.scope` (or empty), `principal.signature`. When `principal` is absent all eight of these are empty strings.
+
+A `replace` payload therefore always has 19 fields after `mode`.
 
 All fields use the existing four-byte big-endian length prefix; there is no JSON
 serialization dependency. Unknown top-level profile fields are ignored and not stored. `pricing` may contain only `currency` and `maxAmount`; any other `pricing` field makes the profile invalid (`invalid_profile`), because the registration authorization covers only those two. Implementations
 SHOULD use the SDK registration builder instead of implementing this encoding.
 
-A relay MUST validate both signatures and the full profile before writing. Identity,
+A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`) before writing. Peer records return the stored principal unchanged. Identity,
 profile and discovery indexes MUST update atomically. A newer mutation requires a
 strictly greater signed timestamp; an equal timestamp is accepted only for the same
 canonical mutation (idempotent retry), and older requests are rejected with 409
@@ -110,7 +113,7 @@ MUST verify a peer record before using it:
 4. `registrationSignature` verifies over
    `buildSignData("register", aceId, registeredAt, encodePayload(encryptionPublicKey, signingPublicKey))`.
 
-`profile` is unverified, self-asserted metadata. Unknown fields are ignored.
+`profile` is unverified, self-asserted metadata. Unknown fields are ignored. Exception: when `profile.principal` is present the client MUST validate it ([09-principal.md](./09-principal.md) § Validation, subject = this record's signing key); a failure rejects the record with `invalid_principal`.
 
 #### Rollback Barrier
 
@@ -138,6 +141,7 @@ All fields are optional:
 | `image` | string | Avatar URL. MUST match the ACE HTTPS URL grammar ([04-messages.md](./04-messages.md) § Encoding Rules) |
 | `endpoint` | string | Endpoint for ACE messages. MUST match the ACE HTTPS URL grammar |
 | `pricing` | object | `{ currency: string, maxAmount?: string }`. `currency` is 1-16 characters with no control characters. `maxAmount` is 1-32 characters matching `^[0-9]+(\.[0-9]+)?$`. Relays store only these two fields |
+| `principal` | object | Principal record ([09-principal.md](./09-principal.md)); subject = the registering identity. Validated by the relay and by clients |
 
 **Reserved tag.** The tag `hosted` declares that the agent's signing and encryption keys are held by a service on its behalf (for example a hosted MCP gateway) rather than by the agent's own runtime. A hosting service MUST add it to every profile it registers and MUST NOT let the agent remove it. Counterparties MAY use it as a trust signal. No other tag is reserved.
 
@@ -152,6 +156,7 @@ All fields are optional:
 | `chain` | CAIP-2 chain ID |
 | `scheme` | `ed25519` or `secp256k1` |
 | `online` | Only agents with active relay connections |
+| `account` | CAIP-10 account; exact match on `profile.principal.account`. Lists every registered delegate of that account |
 | `limit` | Results per page (default 20, max 100) |
 | `cursor` | Pagination cursor |
 

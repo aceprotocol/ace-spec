@@ -38,7 +38,7 @@ The scheme is lowercase `https` only. Userinfo, IPv6 literals and trailing dots 
 
 ### Thread IDs
 
-A thread ID is a string of 1..`MAX_THREAD_ID_LENGTH` (256) code points containing no U+0000–U+001F or U+007F. The empty string is invalid. A JSON `null` is always rejected; an absent `threadId` is the only way to omit it.
+A thread ID is a string of 1..`MAX_THREAD_ID_LENGTH` (256) code points containing no U+0000–U+001F or U+007F. The empty string is invalid. For the envelope `threadId`, a JSON `null` is always rejected; an absent `threadId` is the only way to omit it. Inside message bodies (for example `ref.threadId`, [09-principal.md](./09-principal.md)), a `null` optional field is treated as absent under § Body Rules.
 
 ## Size Limits
 
@@ -97,7 +97,7 @@ Every ACE message uses this envelope format:
 | `to` | Yes | string | Recipient's ACE ID |
 | `conversationId` | Yes | string | Deterministic conversation identifier: 64 lowercase hex characters (see [03-encryption.md](./03-encryption.md)) |
 | `type` | Yes | string | Message type (see § Message Types). A type not defined in § Message Types MUST be rejected. |
-| `threadId` | Conditional | string | Business session identifier, a thread ID (§ Encoding Rules). **REQUIRED for all economic messages**, optional for system/social messages. Allows multiple concurrent deals between the same agent pair within one `conversationId`. Chosen by the initiator (e.g., UUID, deal reference). All messages in a business flow MUST share the same `threadId`. |
+| `threadId` | Conditional | string | Business session identifier, a thread ID (§ Encoding Rules). **REQUIRED for all economic messages**, optional for system, social and principal messages. Allows multiple concurrent deals between the same agent pair within one `conversationId`. Chosen by the initiator (e.g., UUID, deal reference). All messages in a business flow MUST share the same `threadId`. |
 | `timestamp` | Yes | integer | Unix timestamp in seconds (wire integer) |
 | `body` | — | object | Message payload (schema depends on `type`). **Conceptual only**: in transit, the body is encrypted inside `encryption.payload`. Not present as a cleartext field on the wire. |
 | `encryption` | Yes | object | Encryption envelope (see [03-encryption.md](./03-encryption.md)) |
@@ -120,7 +120,7 @@ A received envelope is accepted only if all of the following hold. `ace` is chec
 | `messageId` | `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` (lowercase only) |
 | `from`, `to` | `^ace:sha256:[0-9a-f]{64}$` |
 | `conversationId` | `^[0-9a-f]{64}$` |
-| `type` | One of the 10 types in § Message Types |
+| `type` | One of the 13 types in § Message Types |
 | `threadId` | Absent, or a valid thread ID. `null` is rejected. Economic types require it. |
 | `timestamp` | Wire integer |
 | `encryption.kemCiphertext` | Canonical Base64 of exactly 1120 bytes |
@@ -144,8 +144,9 @@ The decrypted body is accepted only if:
 - It satisfies the schema for its `type` (§ Message Types, § Economic Message Schemas):
   - Required string fields are present, non-null strings. The empty string is allowed.
   - An optional field whose value is `null` is treated as absent.
-  - `ttl` (`rfq`, `offer`) is a wire integer.
-  - Object-typed fields (`settlementDetails`, `proof`, `metadata`) are JSON objects.
+  - `ttl` (`rfq`, `offer`, `request`) is a wire integer.
+  - Object-typed fields (`settlementDetails`, `proof`, `metadata`, `ref`, `details`, `result`) are JSON objects.
+  - `decision.outcome`, `report.outcome` and `ref` satisfy [09-principal.md](./09-principal.md) § Principal Messages.
 
 Unknown body fields are ignored and preserved. A failure is `invalid_body`.
 
@@ -189,10 +190,12 @@ The complete list. A signature produced under one action MUST NOT verify under a
 | `unregister` | `POST /v1/unregister` | Empty (0 bytes) |
 | `intent` | `POST /v1/intents` | `encodePayload(need, join(tags, ","), maxPriceOrEmpty, currencyOrEmpty, decimal(ttl))` |
 | `webhook` | `PUT` / `GET` / `DELETE /v1/webhook` ([08-relay.md](./08-relay.md) § Webhooks) | `encodePayload(method, urlOrEmpty, secretOrEmpty)` |
+| `principal` | Principal attestation ([09-principal.md](./09-principal.md)) | `encodePayload(account, join(roles, ","), signer.scheme, signer.publicKey, subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAtOr0))` |
 
 - For `message`, `aceId` is `from` and `timestamp` is the envelope `timestamp`. `kemCiphertextBytes` and `payloadBytes` are the decoded bytes. `threadIdOrEmpty` is the empty string when `threadId` is absent.
 - For `register` and `register-request`, `aceId` and `timestamp` are the request's. `encryptionPublicKeyB64` and `signingPublicKeyB64` are the Base64 strings as sent.
 - For `listen`, `inbox`, `unregister`, `intent` and `webhook`, `aceId` and `timestamp` are the `X-ACE-Id` and `X-ACE-Timestamp` headers ([08-relay.md](./08-relay.md) § Authentication). `sinceOrDash` is the `since` value, or `-` when absent. `limit` is the effective limit. `tags` absent is the empty list. For `webhook`, `method` is the uppercase HTTP method as sent (`PUT`, `GET` or `DELETE`). For `GET` and `DELETE`, `urlOrEmpty` and `secretOrEmpty` are empty strings. For `PUT` they are the request body's `url` and `secret`.
+- For `principal`, `aceId` is the **subject's** ACE ID and `timestamp` is `issuedAt`; the signature is made by the record's `signer`, not by the holder of `aceId`. `subjectSigningPublicKeyB64` is computed by the verifier from the subject key it verified; `scopeOrEmpty` is empty when `scope` is absent; `decimal(expiresAtOr0)` is `decimal(expiresAt)` (0 never occurs for a valid record).
 
 `threadId` is part of the signed message payload. Economic thread identity is security-relevant: changing `threadId` changes the signed meaning of the message and MUST invalidate the signature.
 
@@ -209,7 +212,7 @@ Decoders MUST reject any other encoding. Verification rules are in [signing-sche
 
 ## Message Types
 
-ACE 1.0 defines exactly 10 message types: `info`, `text`, and the 8 economic types `rfq`, `offer`, `accept`, `reject`, `invoice`, `receipt`, `deliver`, `confirm`.
+ACE 1.0 defines exactly 13 message types: `info`, `text`, the 8 economic types `rfq`, `offer`, `accept`, `reject`, `invoice`, `receipt`, `deliver`, `confirm`, and the 3 principal types `request`, `decision`, `report`.
 
 ### System Messages
 
@@ -241,6 +244,16 @@ Economic messages carry contractual weight. Schema validation is MANDATORY on bo
 | Type | Description | Body Schema |
 |------|-------------|-------------|
 | `text` | Free-form text | `{ "message": "string" }` |
+
+### Principal Messages
+
+| Type | Description | Required Fields | Optional Fields |
+|------|-------------|-----------------|-----------------|
+| `request` | Ask a controller of the same account to approve an action | `action`, `summary` | `ref`, `amount`, `currency`, `details`, `ttl` |
+| `decision` | A controller's answer to a `request` | `requestId`, `outcome` | `reason`, `result` |
+| `report` | Tell another identity of the same account what was done | `action`, `summary`, `outcome` | `ref`, `requestId`, `proof` |
+
+Schemas, enums and the same-account acceptance rules are in [09-principal.md](./09-principal.md). Principal messages never change economic thread state.
 
 ## Economic Message Schemas
 
@@ -467,7 +480,7 @@ The sender of the `rfq` is the **buyer**. The other party is the **seller**. Eac
 | `paid` | `deliver` | seller | `delivered` | Standard delivery after payment |
 | `delivered` | `confirm` | buyer | `confirmed` | Accept delivery |
 
-Non-economic messages (`text`, `info`) are always allowed regardless of state and do not change state. This allows agents to communicate freely during any phase of a deal.
+Non-economic messages (`text`, `info`, `request`, `decision`, `report`) are always allowed regardless of state and do not change state. This allows agents to communicate freely during any phase of a deal.
 
 Any transition not listed above MUST be rejected.
 

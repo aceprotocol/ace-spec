@@ -15,7 +15,7 @@ The companion [`openapi.yaml`](./openapi.yaml) describes this API in OpenAPI 3.1
 | `POST /v1/register` | In body | RegistrationRequest ([02-discovery.md](./02-discovery.md) § Registration authorization) | `{"ok":true,"status":"registered"\|"idempotent"\|"refreshed"\|"rotated"}` |
 | `POST /v1/unregister` | Headers, action `unregister` | No body | `{"ok":true}` |
 | `GET /v1/peer?aceId=` | None | | PeerRecord ([02-discovery.md](./02-discovery.md) § Peer Record) |
-| `GET /v1/discover?q&tags&chain&scheme&online&limit&cursor` | None | Parameters: [02-discovery.md](./02-discovery.md) § Search Parameters | `{"agents":[PeerRecord],"cursor":string\|null}` |
+| `GET /v1/discover?q&tags&chain&scheme&online&account&limit&cursor` | None | Parameters: [02-discovery.md](./02-discovery.md) § Search Parameters | `{"agents":[PeerRecord],"cursor":string\|null}` |
 | `POST /v1/send` | Message signature | `{"message":Envelope}` | `{"ok":true}` |
 | `GET /v1/inbox?since&limit` | Headers, action `inbox` | See § Inbox | `{"messages":[{"streamId","message":Envelope}],"cursor":string\|null}` |
 | `GET /v1/listen?since` | Headers, action `listen` | See § Listen | `text/event-stream` |
@@ -47,7 +47,7 @@ Header names are case-insensitive. A client uses `timestamp = max(now, lastTimes
 
 ## Registration
 
-The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-discovery.md) § Registration authorization, in this order: schema (`invalid_registration`), freshness (`stale_timestamp`), `aceId` equals the signing-key hash (`invalid_registration`), encryption key of 1216 bytes (`invalid_key`), profile (`invalid_profile`), binding `signature` (`invalid_signature`), `authorization` (`invalid_authorization`). The response `status` is:
+The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-discovery.md) § Registration authorization, in this order: schema (`invalid_registration`), freshness (`stale_timestamp`), `aceId` equals the signing-key hash (`invalid_registration`), encryption key of 1216 bytes (`invalid_key`), profile (`invalid_profile`), profile principal (`invalid_principal`, [09-principal.md](./09-principal.md) § Validation), binding `signature` (`invalid_signature`), `authorization` (`invalid_authorization`). The response `status` is:
 
 | Status | Meaning |
 |--------|---------|
@@ -56,7 +56,7 @@ The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-
 | `refreshed` | Newer timestamp, same encryption key |
 | `rotated` | Newer timestamp, different encryption key |
 
-An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`).
+An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`). The `principal` member is stored and served exactly as validated.
 
 `POST /v1/unregister` removes the identity and profile and closes the caller's listen streams. Its auth timestamp MUST be strictly greater than the stored registration timestamp, else 409 `identity_conflict`. The relay retains it as a timestamp barrier so an older registration request cannot resurrect the identity.
 
@@ -64,7 +64,7 @@ An older timestamp, or an equal timestamp with a different mutation, is rejected
 
 `POST /v1/send` takes `{"message": Envelope}`. The relay:
 
-1. Decodes the envelope ([04-messages.md](./04-messages.md) § Envelope Decoding) (`invalid_envelope`).
+1. Decodes the envelope ([04-messages.md](./04-messages.md) § Envelope Decoding; any of the 13 types) (`invalid_envelope`). The relay never reads bodies.
 2. Requires `from` to be registered (`not_registered`) and `to` to be registered (`unknown_peer`).
 3. Verifies the signature against the stored identity of `from`, whose scheme MUST equal `signature.scheme` (`invalid_signature`).
 4. If an envelope with the same `(from, messageId)` is already stored: returns `{"ok":true}` if it is the same envelope (same fingerprint), even when it is now stale; otherwise 409 `message_id_conflict`.
@@ -188,6 +188,7 @@ Error responses have the body `{"error": <code>, "message"?: string}`.
 | `invalid_envelope` | 400 | Envelope fails § Envelope Decoding |
 | `invalid_registration` | 400 | Registration request schema or `aceId` mismatch |
 | `invalid_profile` | 400 | Profile fails § Profile Fields |
+| `invalid_principal` | 400 | `profile.principal` fails [09-principal.md](./09-principal.md) § Validation |
 | `invalid_webhook` | 400 | `PUT /v1/webhook`: malformed `url` or `secret`, or a host that resolves to a blocked address |
 | `invalid_key` | 400 | Encryption key not 1216 bytes |
 | `stale_timestamp` | 400 | Auth or registration timestamp outside the window |

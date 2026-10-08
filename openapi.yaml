@@ -32,11 +32,30 @@ components:
       properties:
         error:
           type: string
-          enum: [invalid_argument, invalid_envelope, invalid_registration, invalid_profile, invalid_webhook, invalid_key,
+          enum: [invalid_argument, invalid_envelope, invalid_registration, invalid_profile, invalid_principal, invalid_webhook, invalid_key,
                  stale_timestamp, envelope_expired, invalid_signature, invalid_authorization, not_registered, unknown_peer,
                  replay, identity_conflict, message_id_conflict, rate_limited, recipient_inbox_full, sender_quota_exceeded,
                  max_open_intents, internal_error]
         message: { type: string }
+    Principal:
+      type: object
+      description: >-
+        09-principal.md § Principal Record. Verified by relays and clients: `signature` by `signer` over the `principal`
+        signing context, subject = the registering identity's signing key.
+      required: [account, roles, signer, issuedAt, expiresAt, signature]
+      properties:
+        account: { type: string, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$', description: CAIP-10 }
+        roles: { type: array, minItems: 1, maxItems: 2, uniqueItems: true, items: { type: string, enum: [controller, agent] }, description: 'Canonical order: controller before agent' }
+        signer:
+          type: object
+          required: [scheme, publicKey]
+          properties:
+            scheme: { type: string, enum: [ed25519, secp256k1] }
+            publicKey: { type: string, description: 'Canonical Base64: 32 bytes (ed25519) or a 33-byte compressed point (secp256k1)' }
+        issuedAt: { type: integer, minimum: 0, maximum: 9007199254740991 }
+        expiresAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: 'Greater than issuedAt; at most 31622400 seconds after it' }
+        scope: { type: string, minLength: 1, maxLength: 256, description: No control characters }
+        signature: { type: string, description: 'Signature encoding of signer.scheme' }
     Profile:
       type: object
       description: 02-discovery.md § Profile Fields. All fields optional; unknown fields are ignored and not stored.
@@ -55,6 +74,7 @@ components:
           properties:
             currency: { type: string, minLength: 1, maxLength: 16, description: No control characters }
             maxAmount: { type: string, minLength: 1, maxLength: 32, pattern: '^[0-9]+(\.[0-9]+)?$' }
+        principal: { $ref: '#/components/schemas/Principal' }
     RegistrationRequest:
       type: object
       description: 02-discovery.md § Registration authorization
@@ -92,7 +112,7 @@ components:
         from: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' }
         to: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' }
         conversationId: { type: string, pattern: '^[0-9a-f]{64}$' }
-        type: { type: string, enum: [info, text, rfq, offer, accept, reject, invoice, receipt, deliver, confirm] }
+        type: { type: string, enum: [info, text, rfq, offer, accept, reject, invoice, receipt, deliver, confirm, request, decision, report] }
         threadId: { type: string, minLength: 1, maxLength: 256, description: 'No U+0000-U+001F or U+007F; required for economic types' }
         timestamp: { type: integer, minimum: 0, maximum: 9007199254740991 }
         encryption:
@@ -149,7 +169,7 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegistrationRequest' } } } }
       responses:
         "200": { description: Registered, content: { application/json: { schema: { type: object, required: [ok, status], properties: { ok: { const: true }, status: { enum: [registered, idempotent, refreshed, rotated] } } } } } }
-        "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`, `invalid_registration`, `stale_timestamp`, `invalid_key`, `invalid_profile`' }
+        "400": { $ref: '#/components/responses/Error', description: '`invalid_argument`, `invalid_registration`, `stale_timestamp`, `invalid_key`, `invalid_profile`, `invalid_principal`' }
         "401": { $ref: '#/components/responses/Error', description: '`invalid_signature`, `invalid_authorization`' }
         "409": { $ref: '#/components/responses/Error', description: '`identity_conflict`' }
         "429": { $ref: '#/components/responses/TooManyRequests', description: '`rate_limited`' }
@@ -186,6 +206,7 @@ paths:
         - { name: chain, in: query, schema: { type: string, maxLength: 128 }, description: CAIP-2 chain ID }
         - { name: scheme, in: query, schema: { type: string, enum: [ed25519, secp256k1] } }
         - { name: online, in: query, schema: { type: boolean }, description: Only agents with active relay connections }
+        - { name: account, in: query, schema: { type: string, maxLength: 175, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$' }, description: 'CAIP-10 account; exact match on profile.principal.account' }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
         - { $ref: '#/components/parameters/Cursor' }
       responses:

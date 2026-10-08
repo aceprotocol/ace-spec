@@ -115,9 +115,12 @@ A principal message is accepted only if, in this order (first failure wins):
 1. `P_self` exists → else `wrong_principal`.
 2. `P_from` exists → else `wrong_principal`.
 3. `validatePrincipalRecord(P_from, senderSigningPublicKey, now)` succeeds → else `wrong_principal`.
-4. `P_from.account == P_self.account` (exact string comparison) → else `wrong_principal`.
-5. `decision` only: `"controller" ∈ P_from.roles` → else `wrong_principal`.
-6. `decision` only: `requestId` is the `messageId` of a `request` the receiver sent in the same `conversationId`, and no `decision` for it has been accepted, and the request is not expired at receipt → else `bad_reference`.
+4. The receiver MUST establish that `P_from.signer` is an authority of `P_from.account`. This holds when at least one of the following is true: (a) `P_from.signer` equals `P_self.signer` (the same attesting key signed both records); (b) `P_from.signer` is in the receiver's trusted-signer set for `P_self.account`, a host-supplied set of `(scheme, publicKey)` pairs (for example the account's on-chain root and owner keys); (c) the account's CAIP-2 namespace is `eip155` and the address derived from `P_from.signer.publicKey` ([signing-schemes/secp256k1.md](./signing-schemes/secp256k1.md)) equals the account address, compared case-insensitively. Otherwise the message is rejected with `wrong_principal`.
+5. `P_from.account == P_self.account` (exact string comparison) → else `wrong_principal`.
+6. `decision` only: `"controller" ∈ P_from.roles` → else `wrong_principal`.
+7. `decision` only: `requestId` is the `messageId` of a `request` the receiver sent in the same `conversationId`, and no `decision` for it has been accepted, and the request is not expired at receipt → else `bad_reference`; and the `decision` sender's ACE ID MUST equal the referenced `requests/` record's `to`; otherwise `wrong_principal`.
+
+**SDK note.** The host supplies `principal.selfSigner` (defaults to the signer of the host's own record) and `principal.trustedSigners` (default empty) when opening the Inbox. Relays do not and cannot perform the step 4 check.
 
 `request` and `report` have no role check. An accepted `decision` marks its request decided; a request has at most one accepted decision. A failed check changes nothing.
 
@@ -128,6 +131,7 @@ SDKs keep one record per sent `request` ([06-security.md](./06-security.md) § A
 `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` = `{"conversationId","decision":null|{"messageId","outcome","timestamp"},"expiresAt":null|int,"messageId","sentAt","to","version":1}`
 
 - `expiresAt` is the request timestamp + `ttl`, null when `ttl` is absent.
+- `to` is the ACE ID the request was sent to; it is consulted when a `decision` arrives (§ Same-Account Rules step 7).
 - The sender writes it after the `request` is delivered and before it clears the pending send.
 - The receiver of the `decision` fills `decision` when it accepts the decision, after the delivery record and before the replay state (and repairs it from delivery records on recovery).
 - A record MAY be deleted 30 days after `sentAt`.
@@ -137,14 +141,15 @@ SDKs keep one record per sent `request` ([06-security.md](./06-security.md) § A
 | Code | Category | Meaning |
 |------|----------|---------|
 | `invalid_principal` | permanent | A principal record fails § Validation (registration, peer record, registration file, local creation) |
-| `wrong_principal` | permanent | A principal message fails § Same-Account Rules 1–5 |
+| `wrong_principal` | permanent | A principal message fails § Same-Account Rules 1–6, or the sender check of step 7 |
 
-A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md) § Errors). `bad_reference` is reused for rule 6.
+A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md) § Errors). `bad_reference` is reused for rule 7.
 
 ## Security Considerations
 
 - **Delegate impersonating its principal.** The record is signed by the account's key over the subject's signing key; a delegate cannot mint one for another subject, and a record cannot be transplanted (§ Validation step 9).
 - **Relay tampering.** The profile is not covered by the registration binding signature. A relay can strip a principal (principal messages from that peer then fail closed with `wrong_principal`) but cannot forge or alter one (but can replay a withdrawn one).
 - **Withdrawal and revocation.** A record binds only the subject's signing key; it carries no registration timestamp. So (a) a compromised subject holding the key can re-register an unexpired record, and (b) a relay, which does not cover the profile with the binding signature, can re-attach a withdrawn but unexpired record. Re-registering without the principal therefore withdraws it only against honest relays; for a compromised subject, `expiresAt` is the only protocol-level revocation, which is why it is required and bounded. Verifiers MAY additionally check on-chain that `signer.publicKey` is still an authority of `account` and treat loss of authority as revocation.
+- **Account strings are not self-certifying.** A principal record can name any `account`; without the signer-binding step above, any key could mint a record claiming to belong to a victim's account and pass the same-account rule. The binding step is therefore mandatory and the trusted-signer set MUST only contain keys the host has verified to control the account.
 - **Key custody.** `hardwareBacking` is self-asserted and not verifiable ([01-identity.md](./01-identity.md)); the principal binding is the verifiable custody fact.
 - **Authority.** The protocol proves that `signer` signed; whether `signer` controls `account` on its chain is a MAY check for verifiers.

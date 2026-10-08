@@ -10,6 +10,8 @@ SDK_PY="${SDK_PY:-$ROOT/sdk-py}"
 PYTHON="${PYTHON:-$SDK_PY/.venv/bin/python}"
 WORK="${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/ace-interop.XXXXXX")}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+# The principal phases read the shared owner keys and delegate subject from the v4 vectors.
+export ACE_VECTORS="${ACE_VECTORS:-$HERE/../test-vectors.json}"
 
 log() { printf '\033[1m==> %s\033[0m\n' "$*"; }
 
@@ -56,6 +58,11 @@ run_phase recv1     # 2: receiver parses, rejects tampered copies, replies with 
 run_phase recv2     # 2: original sender parses the offer
 run_phase persist   # 5: Inbox + FileStore receives (replay.json, threads/, peers/, deliveries/)
 run_phase load      # 5: every SDK loads every other SDK's store
+run_phase pverify   # 6: principal records (live + deterministic), registration files/requests with a principal
+run_phase psend     # 7: delegates send request + report through the Outbox (requests/ ledger)
+run_phase precv     # 7: controllers receive them through a principal Inbox, answer with decisions + report
+run_phase pdecide   # 7: delegates accept the decision (fills requests/), reject a second one, take the report
+run_phase pload     # 7: every SDK loads every delegate's requests/ record
 
 log "results"
 set +e

@@ -1,6 +1,7 @@
 // ACE cross-SDK interop harness — Swift side.
 // Usage: ACEInterop <phase> <workdir>
-// Phases: gen | verify | send1 | recv1 | recv2 | persist | load. See ../../../README.md.
+// Phases: gen | verify | send1 | recv1 | recv2 | persist | load | pverify | psend | precv | pdecide | pload.
+// See ../../../README.md.
 import ACE
 import Foundation
 
@@ -63,6 +64,44 @@ func textBody(_ s: String, _ r: String, _ sch: String) -> [String: JSONValue] {
 let RFQ = obj(#"{"need":"Translate 500 words EN→FR","maxPrice":"10.50","currency":"USDC","ttl":3600}"#)
 let OFFER = obj(#"{"price":"9.75","currency":"USDC","terms":"delivery in 24h / net","ttl":600}"#)
 
+// Principal fixtures (same values in every language; 09-principal). One shared CAIP-10 account; the controller
+// signer (owner key) of scheme s is a v4 test-vectors agent (ed25519: alice, secp256k1: bob). `<lang>-<s>` is a
+// delegate (["agent"]), `<lang>-<s>-rx` a controller (["controller"]).
+nonisolated(unsafe) let VECTORS: [String: Any] = {
+    let path = ProcessInfo.processInfo.environment["ACE_VECTORS"]
+        ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../../../test-vectors.json").standardizedFileURL.path
+    return try! parseJSON(Data(contentsOf: URL(fileURLWithPath: path))) as! [String: Any]
+}()
+let ACCOUNT = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:InteropOwner1111111111111111111111111111111"
+let OWNER_AGENT: [SigningScheme: String] = [.ed25519: "alice", .secp256k1: "bob"]
+let SCOPE = "interop ✓"
+func vec(_ path: String...) -> Any { path.reduce(VECTORS as Any) { ($0 as! [String: Any])[$1]! } }
+// Deterministic record: same signer, delegate subject, issuedAt and expiresAt in every language.
+let FIXED_SUBJECT = vec("vectors", "principalRules", "senders", "agent", "signingPublicKey") as! String
+let FIXED_ISSUED_AT = vec("vectors", "principal", "now") as! Int
+let REQ = obj(#"{"action":"x402.pay","summary":"Pay 1 USDC ✓","amount":"1","currency":"USDC","details":{"payTo":"x","network":"solana"},"ttl":600}"#)
+let REP = obj(#"{"action":"copy.run","summary":"copied 2 trades","outcome":"ok","proof":{"txHash":"0x01"}}"#)
+func owner(_ s: SigningScheme) throws -> SoftwareIdentity {
+    let a = vec("agents", OWNER_AGENT[s]!) as! [String: Any]
+    return try SoftwareIdentity(export: SoftwareIdentityExport(
+        scheme: s, signingPrivateKey: a["signingPrivateKey"] as! String, encryptionPrivateKey: a["encryptionPrivateKey"] as! String))
+}
+func ownerKey(_ s: SigningScheme) -> PrincipalKey {
+    PrincipalKey(scheme: s.rawValue, publicKey: vec("agents", OWNER_AGENT[s]!, "signingPublicKey") as! String)
+}
+/// `Inbox.open` principal: the shared account, this scheme's owner key as `selfSigner`, the other one as trusted.
+func inboxPrincipal(_ s: SigningScheme) -> InboxPrincipal {
+    InboxPrincipal(account: ACCOUNT, selfSigner: ownerKey(s), trustedSigners: Set(SCHEMES.filter { $0 != s }.map(ownerKey)))
+}
+func decisionBodies(_ rid: String, _ conv: String) -> [String: [String: JSONValue]] {
+    ["decisionBody": ["requestId": .string(rid), "outcome": "approve", "result": .object(["payload": "signed ✓"])],
+     "decision2Body": ["requestId": .string(rid), "outcome": "deny", "reason": "changed my mind ✓"],
+     "reportBody": ["action": "x402.pay", "summary": "paid 1 USDC ✓", "outcome": "ok", "requestId": .string(rid),
+                    "ref": .object(["conversationId": .string(conv), "messageId": .string(rid)])]]
+}
+func hex(_ d: Data) -> String { d.map { String(format: "%02x", $0) }.joined() }
+
 // `<lang>-<scheme>` sends; a second identity `<lang>-<scheme>-rx` receives (so swift→swift uses two parties).
 func idFile(_ lang: String, _ s: SigningScheme, rx: Bool = false) throws -> [String: Any] {
     try rd("ids/\(lang)-\(s.rawValue)\(rx ? "-rx" : "").json")
@@ -74,6 +113,9 @@ func identity(_ lang: String, _ s: SigningScheme, rx: Bool = false) throws -> So
 func regFile(_ d: [String: Any]) throws -> RegistrationFile { try RegistrationFile(json: data(d["registrationFile"]!)) }
 func peerOf(_ lang: String, _ s: SigningScheme, rx: Bool = false) throws -> VerifiedPeer {
     try verifyRegistrationFile(regFile(idFile(lang, s, rx: rx)))
+}
+func principalPeer(_ lang: String, _ s: SigningScheme, rx: Bool = false) throws -> VerifiedPeer {
+    try verifyRegistrationFile(RegistrationFile(json: data(idFile(lang, s, rx: rx)["registrationFilePrincipal"]!)))
 }
 func envelope(_ v: Any) throws -> ACEMessage { try decodeEnvelope(data(v)) }
 func summary(_ p: ParsedMessage) throws -> [String: Any] {
@@ -107,11 +149,31 @@ func gen() throws {
         for (k, req) in AUTH { auth[k] = ["headers": try createAuthHeaders(identity: id, request: req, timestamp: ts)] }
         let reg = try createRegistrationFile(for: id, name: "Agent \(LANG) \(s.rawValue)", endpoint: "https://\(LANG).example/ace")
         let req = try createRegistrationRequest(identity: id, profile: .replace(profile(LANG)), timestamp: ts)
+        let principal = try createPrincipalRecord(
+            signer: PrincipalSigner(identity: owner(s)), subjectSigningPublicKey: id.getSigningPublicKey(), account: ACCOUNT,
+            roles: suffix == "-rx" ? ["controller"] : ["agent"], expiresAt: ts + 3600, scope: SCOPE, issuedAt: ts)
+        let regP = try createRegistrationFile(for: id, name: "Agent \(LANG) \(s.rawValue)\(suffix)",
+                                              endpoint: "https://\(LANG).example/ace", principal: principal)
+        var prof = profile(LANG)
+        prof.principal = principal
+        let reqP = try createRegistrationRequest(identity: id, profile: .replace(prof), timestamp: ts)
         try wr("ids/\(LANG)-\(s.rawValue)\(suffix).json", [
             "lang": LANG, "scheme": s.rawValue, "export": try encodable(id.exportPrivateKey()), "aceId": id.getACEId(),
             "address": id.getAddress(), "signingPublicKey": b64(id.getSigningPublicKey()),
             "encryptionPublicKey": b64(id.getEncryptionPublicKey()),
             "registrationFile": try encodable(reg), "registrationRequest": try parseJSON(req.jsonData()), "auth": auth,
+            "principal": try parseJSON(principal.jsonData()), "registrationFilePrincipal": try encodable(regP),
+            "registrationRequestPrincipal": try parseJSON(reqP.jsonData()),
+        ])
+    }
+    for s in SCHEMES {
+        let subject = try ACEBase64.decode(FIXED_SUBJECT)
+        let rec = try createPrincipalRecord(signer: PrincipalSigner(identity: owner(s)), subjectSigningPublicKey: subject,
+                                            account: ACCOUNT, roles: ["agent"], expiresAt: FIXED_ISSUED_AT + 3600, scope: SCOPE,
+                                            issuedAt: FIXED_ISSUED_AT)
+        try wr("fixed/\(LANG)-\(s.rawValue).json", [
+            "record": try parseJSON(rec.jsonData()), "payloadHex": hex(principalPayload(rec, subjectSigningPublicKey: subject)),
+            "signDataHex": hex(try principalSignData(rec, subjectSigningPublicKey: subject)),
         ])
     }
 }
@@ -368,6 +430,212 @@ func load() async throws {
     try wr("out/\(LANG)/load.json", out)
 }
 
+// MARK: - 6, 7: principal
+
+final class Handed: @unchecked Sendable {
+    private let lock = NSLock()
+    private var m: [String: [String: Any]] = [:]
+    func put(_ p: ParsedMessage) { let s = try? summary(p); lock.lock(); m[p.messageId] = s; lock.unlock() }
+    func get(_ id: String) -> Any { lock.lock(); defer { lock.unlock() }; return m[id] ?? NSNull() }
+}
+
+/// A `requests/` record as loaded (`NSNull` when absent).
+func ledgerJSON(_ r: RequestRecord?) -> Any {
+    guard let r else { return NSNull() }
+    let decision: Any = r.decision.map { ["messageId": $0.messageId, "outcome": $0.outcome, "timestamp": $0.timestamp] as [String: Any] } ?? NSNull()
+    return ["conversationId": r.conversationId, "messageId": r.messageId, "to": r.to, "sentAt": r.sentAt,
+            "expiresAt": r.expiresAt as Any? ?? NSNull(), "decision": decision] as [String: Any]
+}
+func message(_ v: Any, _ k: String) -> [String: Any] { (v as! [String: Any])[k] as! [String: Any] }
+
+func pverify() throws {
+    var out: [String: Any] = [:]
+    for src in LANGS {
+        for s in SCHEMES {
+            var r: [String: Any] = [:]
+            for (role, rx) in [("delegate", false), ("controller", true)] {
+                let d = try idFile(src, s, rx: rx)
+                let spk = try ACEBase64.decode(d["signingPublicKey"] as! String)
+                let otherKey = try ACEBase64.decode(idFile(src, s, rx: !rx)["signingPublicKey"] as! String)
+                r[role] = [
+                    "record": attempt {
+                        let p = try validatePrincipalRecord(PrincipalRecord(json: data(d["principal"]!)), subjectSigningPublicKey: spk, now: now())
+                        return ["record": try parseJSON(p.jsonData()), "payloadHex": hex(principalPayload(p, subjectSigningPublicKey: spk)),
+                                "signDataHex": hex(try principalSignData(p, subjectSigningPublicKey: spk))]
+                    },
+                    "regFile": attempt {
+                        let p = try verifyRegistrationFile(RegistrationFile(json: data(d["registrationFilePrincipal"]!))).principal
+                        return ["principal": try p.map { try parseJSON($0.jsonData()) } ?? NSNull()]
+                    },
+                    "regRequest": attempt {
+                        let v = try verifyRegistrationRequest(data(d["registrationRequestPrincipal"]!))
+                        return ["requestDigest": v.requestDigest, "aceId": v.peer.aceId]
+                    },
+                    "wrongSubject": attempt {
+                        ["x": try validatePrincipalRecord(PrincipalRecord(json: data(d["principal"]!)), subjectSigningPublicKey: otherKey, now: now()).account]
+                    },
+                ]
+            }
+            let f = try rd("fixed/\(src)-\(s.rawValue).json")
+            r["fixed"] = attempt {
+                let subject = try ACEBase64.decode(FIXED_SUBJECT)
+                let p = try validatePrincipalRecord(PrincipalRecord(json: data(f["record"]!)), subjectSigningPublicKey: subject, now: FIXED_ISSUED_AT)
+                return ["payloadHex": hex(principalPayload(p, subjectSigningPublicKey: subject)),
+                        "signDataHex": hex(try principalSignData(p, subjectSigningPublicKey: subject))]
+            }
+            out["\(src)-\(s.rawValue)"] = r
+        }
+    }
+    try wr("out/\(LANG)/pverify.json", out)
+}
+
+/// Delegate `<LANG>-<s>` sends a `request` and a `report` to every controller through its Outbox; delivery writes `requests/`.
+func psend() async throws {
+    var out: [String: Any] = [:]
+    for s in SCHEMES {
+        let store: FileStore, outbox: Outbox
+        do {
+            store = try FileStore(directory: url("pstores/\(LANG)-\(s.rawValue)"))
+            outbox = try await Outbox.open(identity: identity(LANG, s), store: store)
+        } catch {
+            for R in LANGS { try wr("msgs/p1/\(LANG)-\(R)-\(s.rawValue).json", ["error": fail(error)]) }
+            continue
+        }
+        for R in LANGS {
+            let key = "\(LANG)-\(R)-\(s.rawValue)"
+            do {
+                let peer = try principalPeer(R, s, rx: true)
+                func send(_ type: MessageType, _ body: [String: JSONValue]) async throws -> Any {
+                    let p = try await outbox.stage(recipient: peer, type: type, body: body)
+                    return try parseJSON(await outbox.deliver(p.requestId) { m in m.jsonData() })
+                }
+                let request = try await send(.request, REQ)
+                let report = try await send(.report, REP)
+                let req = request as! [String: Any]
+                out[key] = ["ledger": ledgerJSON(try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
+                                                                       messageId: req["messageId"] as! String))]
+                try wr("msgs/p1/\(key).json", ["requestBody": try anyJSON(REQ), "reportBody": try anyJSON(REP),
+                                               "request": request, "report": report])
+            } catch {
+                try wr("msgs/p1/\(key).json", ["error": fail(error)])
+            }
+        }
+    }
+    try wr("out/\(LANG)/psend.json", out)
+}
+
+/// Controller `<LANG>-<s>-rx` receives every delegate's request and report through an Inbox opened with the shared
+/// principal, then answers with two different decisions and a report.
+func precv() async throws {
+    var out: [String: Any] = [:]
+    for s in SCHEMES {
+        let me: SoftwareIdentity, inbox: Inbox
+        let handed = Handed()
+        do {
+            me = try identity(LANG, s, rx: true)
+            let store = try FileStore(directory: url("pstores/\(LANG)-\(s.rawValue)-rx"))
+            let peers = try PeerStore(store: store)
+            for S in LANGS {
+                _ = try await peers.pinRegistrationFile(RegistrationFile(json: data(idFile(S, s)["registrationFilePrincipal"]!)))
+            }
+            inbox = try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { handed.put($0) }, principal: inboxPrincipal(s))
+        } catch {
+            for S in LANGS { out["\(S)-\(LANG)-\(s.rawValue)"] = ["error": fail(error)] }
+            continue
+        }
+        for S in LANGS {
+            let key = "\(S)-\(LANG)-\(s.rawValue)"
+            var r: [String: Any] = [:]
+            do {
+                let m = try rd("msgs/p1/\(key).json")
+                if let e = m["error"] { throw NSError(domain: "sender failed: \(e)", code: 1) }
+                let peer = try principalPeer(S, s)
+                for k in ["request", "report"] {
+                    r[k] = outcome(try await inbox.receive(try data(m[k]!), source: .direct))
+                    r["\(k)Parsed"] = handed.get(message(m, k)["messageId"] as! String)
+                }
+                r["noContext"] = attempt { try parseFresh(m["report"]!, me, peer) }
+                let req = message(m, "request")
+                let bodies = decisionBodies(req["messageId"] as! String, req["conversationId"] as! String)
+                var msgs: [String: Any] = [:]
+                for (k, b) in bodies { msgs[k] = try anyJSON(b) }
+                for (k, type) in [("decision", MessageType.decision), ("decision2", .decision), ("report", .report)] {
+                    let env = try createMessage(sender: me, recipient: peer, type: type, body: bodies["\(k)Body"]!,
+                                                threads: ThreadStateMachine(localAceId: me.getACEId()))
+                    msgs[k] = try parseJSON(env.jsonData())
+                }
+                try wr("msgs/p2/\(LANG)-\(S)-\(s.rawValue).json", msgs)
+            } catch {
+                r["error"] = fail(error)
+            }
+            out[key] = r
+        }
+        await inbox.close()
+    }
+    try wr("out/\(LANG)/precv.json", out)
+}
+
+/// Delegate `<LANG>-<s>` receives each controller's decisions and report through an Inbox on its Outbox store: the
+/// first decision fills the request, a replay is a duplicate, the second different decision is `bad_reference`.
+func pdecide() async throws {
+    var out: [String: Any] = [:]
+    for s in SCHEMES {
+        let store: FileStore, inbox: Inbox
+        let handed = Handed()
+        do {
+            let me = try identity(LANG, s)
+            store = try FileStore(directory: url("pstores/\(LANG)-\(s.rawValue)"))
+            let peers = try PeerStore(store: store)
+            for R in LANGS {
+                _ = try await peers.pinRegistrationFile(RegistrationFile(json: data(idFile(R, s, rx: true)["registrationFilePrincipal"]!)))
+            }
+            inbox = try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { handed.put($0) }, principal: inboxPrincipal(s))
+        } catch {
+            for R in LANGS { out["\(R)-\(LANG)-\(s.rawValue)"] = ["error": fail(error)] }
+            continue
+        }
+        for R in LANGS {
+            let key = "\(R)-\(LANG)-\(s.rawValue)"
+            var r: [String: Any] = [:]
+            do {
+                let m = try rd("msgs/p2/\(key).json")
+                let req = message(try rd("msgs/p1/\(LANG)-\(R)-\(s.rawValue).json"), "request")
+                for (k, env) in [("decision", "decision"), ("decisionAgain", "decision"), ("decision2", "decision2"), ("report", "report")] {
+                    r[k] = outcome(try await inbox.receive(try data(m[env]!), source: .direct))
+                }
+                r["decisionParsed"] = handed.get(message(m, "decision")["messageId"] as! String)
+                r["reportParsed"] = handed.get(message(m, "report")["messageId"] as! String)
+                r["ledger"] = attempt {
+                    ["record": ledgerJSON(try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
+                                                                messageId: req["messageId"] as! String))]
+                }
+            } catch {
+                r["error"] = fail(error)
+            }
+            out[key] = r
+        }
+        await inbox.close()
+    }
+    try wr("out/\(LANG)/pdecide.json", out)
+}
+
+/// Every delegate's `requests/` record of its request to this language, loaded here.
+func pload() throws {
+    var out: [String: Any] = [:]
+    for S in LANGS {
+        for s in SCHEMES {
+            let key = "\(S)-\(LANG)-\(s.rawValue)"
+            out[key] = attempt {
+                let req = message(try rd("msgs/p1/\(key).json"), "request")
+                let store = try FileStore(directory: url("pstores/\(S)-\(s.rawValue)"))
+                return ["record": ledgerJSON(try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
+                                                                   messageId: req["messageId"] as! String))]
+            }
+        }
+    }
+    try wr("out/\(LANG)/pload.json", out)
+}
+
 switch phase {
 case "gen": try gen()
 case "verify": try verify()
@@ -376,5 +644,10 @@ case "recv1": try recv1()
 case "recv2": try recv2()
 case "persist": try await persist()
 case "load": try await load()
+case "pverify": try pverify()
+case "psend": try await psend()
+case "precv": try await precv()
+case "pdecide": try await pdecide()
+case "pload": try pload()
 default: fatalError("unknown phase \(phase)")
 }

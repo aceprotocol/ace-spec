@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ from typing import Any
 LANGS = ["ts", "py", "swift"]
 SCHEMES = ["ed25519", "secp256k1"]
 AUTH = ["listen", "inbox", "unregister", "intent"]
+ACCOUNT = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:InteropOwner1111111111111111111111111111111"
 
 
 def load(w: str, p: str) -> Any:
@@ -216,6 +218,123 @@ class Checker:
                         self.expect(T, R, L, s, ro["handedOnOpen"] == 0, f"recovery re-handed {ro['handedOnOpen']} messages")
                         self.expect(T, R, L, s, ro["duplicate"]["kind"] == "duplicate", f"re-receive after reopen: {ro['duplicate']}")
 
+    # --- 6, 7: principal ---------------------------------------------------------------
+
+    def principal_records(self) -> None:
+        T = "6 principal records"
+        roles = {"delegate": ("", ["agent"]), "controller": ("-rx", ["controller"])}
+        outs = {v: load(self.w, f"out/{v}/pverify.json") or {} for v in LANGS}
+        fixed = {(lang, s): load(self.w, f"fixed/{lang}-{s}.json") for lang in LANGS for s in SCHEMES}
+        same: dict[tuple, dict[str, Any]] = {}  # (src, s, what) -> verifier -> value
+        for v in LANGS:
+            for src in LANGS:
+                for s in SCHEMES:
+                    r = outs[v].get(f"{src}-{s}")
+                    if not self.expect(T, src, v, s, r is not None, "missing pverify output"):
+                        continue
+                    for role, (suffix, want_roles) in roles.items():
+                        d = load(self.w, f"ids/{src}-{s}{suffix}.json")
+                        x = r[role]
+                        rec = strip_none(d["principal"])
+                        if self.ok(T, src, v, s, x["record"], f"validatePrincipalRecord ({role})"):
+                            got = strip_none(x["record"]["record"])
+                            self.expect(T, src, v, s, got == rec, f"{role} record re-encodes differently: {got} vs {rec}")
+                            self.expect(T, src, v, s, rec["account"] == ACCOUNT and rec["roles"] == want_roles,
+                                        f"{role} record account/roles: {rec['account']} {rec['roles']}")
+                            for h in ("payloadHex", "signDataHex"):
+                                same.setdefault((src, s, f"{role} {h}"), {})[v] = x["record"][h]
+                        if self.ok(T, src, v, s, x["regFile"], f"verifyRegistrationFile with principal ({role})"):
+                            self.expect(T, src, v, s, strip_none(x["regFile"]["principal"]) == rec,
+                                        f"{role} registration-file principal differs: {x['regFile']['principal']}")
+                        if self.ok(T, src, v, s, x["regRequest"], f"verifyRegistrationRequest with principal ({role})"):
+                            self.expect(T, src, v, s, x["regRequest"]["aceId"] == d["aceId"], f"{role} registration request aceId")
+                            same.setdefault((src, s, f"{role} requestDigest"), {})[v] = x["regRequest"]["requestDigest"]
+                        self.code(T, src, v, s, x["wrongSubject"], "invalid_principal", f"{role} record checked against another subject")
+                    # deterministic record: creator's bytes == verifier's own bytes, and the verifier recomputes them.
+                    # The signature is excluded: signers may hedge (CryptoKit ed25519 in Swift, noble secp256k1 with
+                    # extraEntropy in TS), as test-vectors marks with verifyOnly; every verifier checks it instead.
+                    fc, fv = fixed[(src, s)], fixed[(v, s)]
+                    if not self.expect(T, src, v, s, fc is not None and fv is not None, "missing fixed record"):
+                        continue
+                    unsigned = [{k: x for k, x in strip_none(f["record"]).items() if k != "signature"} for f in (fc, fv)]
+                    self.expect(T, src, v, s, unsigned[0] == unsigned[1],
+                                f"fixed record differs between {src} and {v}: {fc['record']} vs {fv['record']}")
+                    for h in ("payloadHex", "signDataHex"):
+                        self.expect(T, src, v, s, fc[h] == fv[h], f"fixed {h} differs between {src} and {v}")
+                    if self.ok(T, src, v, s, r["fixed"], "validatePrincipalRecord (fixed record)"):
+                        for h in ("payloadHex", "signDataHex"):
+                            self.expect(T, src, v, s, r["fixed"][h] == fc[h], f"fixed {h} recomputed by {v} differs")
+        for (src, s, what), per in same.items():
+            for v in per:
+                self.expect(T, src, v, s, len(set(per.values())) == 1, f"{what} differs across verifiers: {per}")
+
+    def principal_messages(self) -> None:
+        T = "7 principal messages"
+        rc = {lang: load(self.w, f"out/{lang}/precv.json") or {} for lang in LANGS}
+        ps = {lang: load(self.w, f"out/{lang}/psend.json") or {} for lang in LANGS}
+        pd = {lang: load(self.w, f"out/{lang}/pdecide.json") or {} for lang in LANGS}
+        pl = {lang: load(self.w, f"out/{lang}/pload.json") or {} for lang in LANGS}
+        for S in LANGS:
+            for R in LANGS:
+                for s in SCHEMES:
+                    key = f"{S}-{R}-{s}"
+                    sid = load(self.w, f"ids/{S}-{s}.json")["aceId"]
+                    rid = load(self.w, f"ids/{R}-{s}-rx.json")["aceId"]
+                    p1 = load(self.w, f"msgs/p1/{key}.json")
+                    if not self.expect(T, S, R, s, p1 is not None and "error" not in p1, f"send failed: {p1 and p1.get('error')}"):
+                        continue
+                    req = p1["request"]
+                    # the delegate's ledger right after delivery (06 Appendix A requests/)
+                    led = (ps[S].get(key) or {}).get("ledger")
+                    want = {"conversationId": req["conversationId"], "messageId": req["messageId"], "to": rid,
+                            "expiresAt": req["timestamp"] + p1["requestBody"]["ttl"], "decision": None}
+                    if self.expect(T, S, R, s, isinstance(led, dict), f"no requests/ record after delivery: {led}"):
+                        self.expect(T, S, R, s, {k: led.get(k) for k in want} == want and isinstance(led.get("sentAt"), int),
+                                    f"requests/ record after delivery: {led} (want {want})")
+                    # the controller's Inbox
+                    r = rc[R].get(key)
+                    if not self.expect(T, S, R, s, r is not None and "error" not in r, f"receiver failed: {r and r.get('error')}"):
+                        continue
+                    for k in ("request", "report"):
+                        if self.expect(T, S, R, s, r[k]["kind"] == "delivered", f"Inbox.receive {k}: {r[k]}"):
+                            p = r[f"{k}Parsed"] or {}
+                            self.expect(T, S, R, s, p.get("body") == p1[f"{k}Body"] and p.get("type") == k,
+                                        f"{k} handed differently: {p}")
+                            self.expect(T, S, R, s, p.get("from") == sid and p.get("to") == rid and p.get("threadId") is None,
+                                        f"{k} from/to/threadId: {p}")
+                    self.code(T, S, R, s, r["noContext"], "wrong_principal", "report parsed without a receiver principal")
+                    # the delegate's Inbox
+                    p2 = load(self.w, f"msgs/p2/{R}-{S}-{s}.json")
+                    q = pd[S].get(f"{R}-{S}-{s}")
+                    if not self.expect(T, S, R, s, p2 is not None and q is not None and "error" not in q,
+                                       f"decision receiver failed: {q and q.get('error')}"):
+                        continue
+                    if self.expect(T, S, R, s, q["decision"]["kind"] == "delivered", f"decision: {q['decision']}"):
+                        p = q["decisionParsed"] or {}
+                        self.expect(T, S, R, s, p.get("body") == p2["decisionBody"] and p.get("from") == rid,
+                                    f"decision handed differently: {p}")
+                    self.expect(T, S, R, s, q["decisionAgain"]["kind"] == "duplicate", f"decision redelivered: {q['decisionAgain']}")
+                    self.expect(T, S, R, s, q["decision2"]["kind"] == "quarantined" and q["decision2"].get("code") == "bad_reference",
+                                f"second, different decision: expected quarantined bad_reference, got {q['decision2']}")
+                    if self.expect(T, S, R, s, q["report"]["kind"] == "delivered", f"controller report: {q['report']}"):
+                        p = q["reportParsed"] or {}
+                        self.expect(T, S, R, s, p.get("body") == p2["reportBody"], f"controller report handed differently: {p}")
+                    dec = p2["decision"]
+                    filled = {**want, "sentAt": (led or {}).get("sentAt"),
+                              "decision": {"messageId": dec["messageId"], "outcome": "approve", "timestamp": dec["timestamp"]}}
+                    if self.ok(T, S, R, s, q["ledger"], "loadRequestRecord after the decision"):
+                        self.expect(T, S, R, s, q["ledger"]["record"] == filled, f"filled record: {q['ledger']['record']} (want {filled})")
+                    # byte shape of the stored record: canonical JSON with version 1 at requests/<sha256(conv 0x00 mid)>.json
+                    h = hashlib.sha256(f"{req['conversationId']}\0{req['messageId']}".encode()).hexdigest()
+                    path = os.path.join(self.w, f"pstores/{S}-{s}/requests/{h}.json")
+                    raw = open(path, "rb").read() if os.path.exists(path) else None
+                    canon = json.dumps({**filled, "version": 1}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+                    self.expect(T, S, R, s, raw == canon, f"requests/{h}.json bytes: {raw!r} (want {canon!r})")
+                    # the receiver's SDK reads the delegate's ledger
+                    lo = pl[R].get(key)
+                    if self.ok(T, S, R, s, lo, f"loadRequestRecord by {R}"):
+                        self.expect(T, S, R, s, lo["record"] == filled, f"{R} loads {lo['record']} (want {filled})")
+
     # --- report ------------------------------------------------------------------------
 
     def report(self) -> int:
@@ -225,6 +344,8 @@ class Checker:
             "3 registration request": ("creator", "verifier"),
             "4 auth headers": ("creator", "verifier"),
             "5 persisted state": ("writer", "loader"),
+            "6 principal records": ("creator", "verifier"),
+            "7 principal messages": ("sender", "receiver"),
         }
         total = passed = 0
         for table in sorted(self.cells):
@@ -258,6 +379,8 @@ def main() -> int:
     c.identities()
     c.messages()
     c.persistence()
+    c.principal_records()
+    c.principal_messages()
     return c.report()
 
 

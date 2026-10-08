@@ -1,7 +1,8 @@
 """ACE cross-SDK interop harness — Python side.
 
 Usage: python interop.py <phase> <workdir>
-Phases: gen | verify | send1 | recv1 | recv2 | persist | load. See ../README.md.
+Phases: gen | verify | send1 | recv1 | recv2 | persist | load | pverify | psend | precv | pdecide | pload.
+See ../README.md.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import time
 from typing import Any, Callable
 
 import ace
+from ace.principal import load_request_record, principal_payload
 from ace.store import write_record
 
 
@@ -86,6 +88,51 @@ def text_body(s: str, r: str, sch: str) -> dict:
 RFQ = {"need": "Translate 500 words EN→FR", "maxPrice": "10.50", "currency": "USDC", "ttl": 3600}
 OFFER = {"price": "9.75", "currency": "USDC", "terms": "delivery in 24h / net", "ttl": 600}
 
+# --- principal fixtures (same values in every language; 09-principal) ---------------------
+# One shared CAIP-10 account. The controller signer (owner key) of scheme s is a v4
+# test-vectors agent (ed25519: alice, secp256k1: bob), so every language signs with the same
+# key and every Inbox trusts it as `selfSigner`. `<lang>-<s>` is a delegate (["agent"]),
+# `<lang>-<s>-rx` a controller (["controller"]).
+VECTORS_PATH = os.environ.get("ACE_VECTORS") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "test-vectors.json")
+with open(VECTORS_PATH, encoding="utf-8") as _f:
+    VECTORS = json.load(_f)
+ACCOUNT = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:InteropOwner1111111111111111111111111111111"
+OWNER_AGENT = {"ed25519": "alice", "secp256k1": "bob"}
+SCOPE = "interop ✓"
+# Deterministic record: same signer, delegate subject (vectors principalRules.senders.agent),
+# issuedAt and expiresAt in every language, so record, payload and signData must be byte-equal.
+FIXED_SUBJECT = VECTORS["vectors"]["principalRules"]["senders"]["agent"]["signingPublicKey"]
+FIXED_ISSUED_AT = VECTORS["vectors"]["principal"]["now"]
+REQ = {"action": "x402.pay", "summary": "Pay 1 USDC ✓", "amount": "1", "currency": "USDC",
+       "details": {"payTo": "x", "network": "solana"}, "ttl": 600}
+REP = {"action": "copy.run", "summary": "copied 2 trades", "outcome": "ok", "proof": {"txHash": "0x01"}}
+
+
+def owner(s: str) -> ace.SoftwareIdentity:
+    a = VECTORS["agents"][OWNER_AGENT[s]]
+    return ace.SoftwareIdentity.from_export({k: a[k] for k in ("scheme", "signingPrivateKey", "encryptionPrivateKey")})
+
+
+def owner_key(s: str) -> dict:
+    return {"scheme": s, "publicKey": VECTORS["agents"][OWNER_AGENT[s]]["signingPublicKey"]}
+
+
+def inbox_principal(s: str) -> dict:
+    """``Inbox.open`` principal: the shared account, the owner key of this scheme as
+    ``selfSigner`` and the other scheme's owner key as a trusted signer."""
+    return {"account": ACCOUNT, "selfSigner": owner_key(s),
+            "trustedSigners": [owner_key(x) for x in SCHEMES if x != s]}
+
+
+def decision_bodies(rid: str, conv: str) -> dict:
+    return {
+        "decisionBody": {"requestId": rid, "outcome": "approve", "result": {"payload": "signed ✓"}},
+        "decision2Body": {"requestId": rid, "outcome": "deny", "reason": "changed my mind ✓"},
+        "reportBody": {"action": "x402.pay", "summary": "paid 1 USDC ✓", "outcome": "ok", "requestId": rid,
+                       "ref": {"conversationId": conv, "messageId": rid}},
+    }
+
 
 def rx(s: str) -> str:
     """``<lang>-<scheme>`` sends; a second identity ``<lang>-<scheme>-rx`` receives."""
@@ -98,6 +145,10 @@ def identity(lang: str, s: str) -> ace.SoftwareIdentity:
 
 def peer_of(lang: str, s: str) -> ace.VerifiedPeer:
     return ace.verify_registration_file(rd(f"ids/{lang}-{s}.json")["registrationFile"])
+
+
+def principal_peer(lang: str, s: str) -> ace.VerifiedPeer:
+    return ace.verify_registration_file(rd(f"ids/{lang}-{s}.json")["registrationFilePrincipal"])
 
 
 def summary(p: ace.ParsedMessage) -> dict:
@@ -124,6 +175,11 @@ def gen() -> None:
         idn = ace.SoftwareIdentity.generate(s.replace("-rx", ""))  # type: ignore[arg-type]
         ts = now()
         auth = {k: {"headers": ace.create_auth_headers(idn, req, ts)} for k, req in AUTH.items()}
+        base = s.replace("-rx", "")
+        principal = ace.create_principal_record(
+            ace.PrincipalSigner.from_identity(owner(base)), subject_signing_public_key=idn.get_signing_public_key(),
+            account=ACCOUNT, roles=["controller"] if s.endswith("-rx") else ["agent"], scope=SCOPE,
+            expires_at=ts + 3600, issued_at=ts)
         wr(f"ids/{LANG}-{s}.json", {
             "lang": LANG, "scheme": s.replace("-rx", ""), "export": idn.export_private_key(), "aceId": idn.get_ace_id(),
             "address": idn.get_address(), "signingPublicKey": b64(idn.get_signing_public_key()),
@@ -131,7 +187,19 @@ def gen() -> None:
             "registrationFile": ace.create_registration_file(idn, name=f"Agent {LANG} {s}", endpoint=f"https://{LANG}.example/ace").to_dict(),
             "registrationRequest": ace.create_registration_request(idn, profile(LANG), ts),
             "auth": auth,
+            "principal": principal.to_dict(),
+            "registrationFilePrincipal": ace.create_registration_file(
+                idn, name=f"Agent {LANG} {s}", endpoint=f"https://{LANG}.example/ace", principal=principal).to_dict(),
+            "registrationRequestPrincipal": ace.create_registration_request(
+                idn, {**profile(LANG), "principal": principal.to_dict()}, ts),
         })
+    for s in SCHEMES:
+        subject = ace.from_base64(FIXED_SUBJECT)
+        rec = ace.create_principal_record(
+            ace.PrincipalSigner.from_identity(owner(s)), subject_signing_public_key=subject, account=ACCOUNT,
+            roles=["agent"], scope=SCOPE, expires_at=FIXED_ISSUED_AT + 3600, issued_at=FIXED_ISSUED_AT)
+        wr(f"fixed/{LANG}-{s}.json", {"record": rec.to_dict(), "payloadHex": principal_payload(rec, subject).hex(),
+                                      "signDataHex": ace.principal_sign_data(rec, subject).hex()})
 
 
 def verify() -> None:
@@ -366,5 +434,181 @@ def load() -> None:
     wr(f"out/{LANG}/load.json", out)
 
 
-PHASES = {"gen": gen, "verify": verify, "send1": send1, "recv1": recv1, "recv2": recv2, "persist": persist, "load": load}
+# --- 6, 7: principal ---------------------------------------------------------------------
+
+
+def ledger(rec: dict | None) -> dict | None:
+    """A ``requests/`` record as loaded (without the store ``version``)."""
+    return None if rec is None else {k: v for k, v in rec.items() if k != "version"}
+
+
+def pverify() -> None:
+    out: dict = {}
+    for src in LANGS:
+        for s in SCHEMES:
+            r: dict = {}
+            out[f"{src}-{s}"] = r
+            for role, suffix, other in (("delegate", "", "-rx"), ("controller", "-rx", "")):
+                d = rd(f"ids/{src}-{s}{suffix}.json")
+                spk = ace.from_base64(d["signingPublicKey"])
+
+                def record() -> dict:
+                    p = ace.validate_principal_record(d["principal"], spk, now())
+                    return {"record": p.to_dict(), "payloadHex": principal_payload(p, spk).hex(),
+                            "signDataHex": ace.principal_sign_data(p, spk).hex()}
+
+                def reg_file() -> dict:
+                    p = ace.verify_registration_file(d["registrationFilePrincipal"]).principal
+                    return {"principal": p.to_dict() if p else None}
+
+                def reg_request() -> dict:
+                    v = ace.verify_registration_request(d["registrationRequestPrincipal"])
+                    return {"requestDigest": v.request_digest, "aceId": v.peer.ace_id}
+                other_key = ace.from_base64(rd(f"ids/{src}-{s}{other}.json")["signingPublicKey"])
+                r[role] = {
+                    "record": attempt(record), "regFile": attempt(reg_file), "regRequest": attempt(reg_request),
+                    "wrongSubject": attempt(lambda: {"x": ace.validate_principal_record(d["principal"], other_key, now()).account}),
+                }
+            f = rd(f"fixed/{src}-{s}.json")
+
+            def fixed() -> dict:
+                subject = ace.from_base64(FIXED_SUBJECT)
+                p = ace.validate_principal_record(f["record"], subject, FIXED_ISSUED_AT)
+                return {"payloadHex": principal_payload(p, subject).hex(),
+                        "signDataHex": ace.principal_sign_data(p, subject).hex()}
+            r["fixed"] = attempt(fixed)
+    wr(f"out/{LANG}/pverify.json", out)
+
+
+def psend() -> None:
+    """Delegate ``<LANG>-<s>`` sends a ``request`` and a ``report`` to every controller through
+    its Outbox (FileStore ``pstores/<LANG>-<s>``); delivery writes the ``requests/`` record."""
+    out: dict = {}
+    for s in SCHEMES:
+        try:
+            me = identity(LANG, s)
+            store = ace.FileStore(P(f"pstores/{LANG}-{s}"))
+            outbox = ace.Outbox.open(me, store)
+        except Exception as e:  # noqa: BLE001
+            for R in LANGS:
+                wr(f"msgs/p1/{LANG}-{R}-{s}.json", {"error": fail(e)})
+            continue
+        for R in LANGS:
+            key = f"{LANG}-{R}-{s}"
+            try:
+                peer = principal_peer(R, rx(s))
+                req = outbox.deliver(outbox.stage(peer, "request", REQ).request_id, lambda m: m.to_dict())
+                rep = outbox.deliver(outbox.stage(peer, "report", REP).request_id, lambda m: m.to_dict())
+                out[key] = {"ledger": ledger(load_request_record(store, req["conversationId"], req["messageId"]))}
+                wr(f"msgs/p1/{key}.json", {"requestBody": REQ, "reportBody": REP, "request": req, "report": rep})
+            except Exception as e:  # noqa: BLE001
+                wr(f"msgs/p1/{key}.json", {"error": fail(e)})
+    wr(f"out/{LANG}/psend.json", out)
+
+
+def precv() -> None:
+    """Controller ``<LANG>-<s>-rx`` receives every delegate's request and report through an
+    Inbox opened with the shared principal, then answers with two different decisions and a
+    report (``msgs/p2/<LANG>-<S>-<s>.json``)."""
+    out: dict = {}
+    for s in SCHEMES:
+        keys = [f"{S}-{LANG}-{s}" for S in LANGS]
+        try:
+            me = identity(LANG, rx(s))
+            store = ace.FileStore(P(f"pstores/{LANG}-{rx(s)}"))
+            peers = ace.PeerStore(store)
+            for S in LANGS:
+                peers.pin_registration_file(rd(f"ids/{S}-{s}.json")["registrationFilePrincipal"])
+            handed: dict = {}
+            inbox = ace.Inbox.open(me, store, peers, lambda m: handed.__setitem__(m.message_id, summary(m)),
+                                   principal=inbox_principal(s))
+        except Exception as e:  # noqa: BLE001
+            for k in keys:
+                out[k] = {"error": fail(e)}
+            continue
+        try:
+            for S in LANGS:
+                key = f"{S}-{LANG}-{s}"
+                r: dict = {}
+                out[key] = r
+                try:
+                    m = rd(f"msgs/p1/{key}.json")
+                    if "error" in m:
+                        raise RuntimeError(f"sender failed: {m['error']}")
+                    peer = principal_peer(S, s)
+                    for k in ("request", "report"):
+                        r[k] = outcome(inbox.receive(wire(m[k]), ace.ReceiveSource.direct()))
+                        r[f"{k}Parsed"] = handed.get(m[k]["messageId"])
+                    r["noContext"] = attempt(lambda: summary(parse_fresh(m["report"], me, peer)))
+                    rid, conv = m["request"]["messageId"], m["request"]["conversationId"]
+                    bodies = decision_bodies(rid, conv)
+                    msgs: dict = dict(bodies)
+                    for k, typ in (("decision", "decision"), ("decision2", "decision"), ("report", "report")):
+                        msgs[k] = ace.create_message(me, peer, typ, bodies[f"{k}Body"], ace.ThreadStateMachine(me.get_ace_id())).to_dict()
+                    wr(f"msgs/p2/{LANG}-{S}-{s}.json", msgs)
+                except Exception as e:  # noqa: BLE001
+                    r["error"] = fail(e)
+        finally:
+            inbox.close()
+    wr(f"out/{LANG}/precv.json", out)
+
+
+def pdecide() -> None:
+    """Delegate ``<LANG>-<s>`` receives each controller's decisions and report through an Inbox
+    on the store its Outbox wrote: the first decision fills the request, a replay is a
+    duplicate, the second different decision is ``bad_reference``."""
+    out: dict = {}
+    for s in SCHEMES:
+        keys = [f"{R}-{LANG}-{s}" for R in LANGS]
+        try:
+            me = identity(LANG, s)
+            store = ace.FileStore(P(f"pstores/{LANG}-{s}"))
+            peers = ace.PeerStore(store)
+            for R in LANGS:
+                peers.pin_registration_file(rd(f"ids/{R}-{rx(s)}.json")["registrationFilePrincipal"])
+            handed: dict = {}
+            inbox = ace.Inbox.open(me, store, peers, lambda m: handed.__setitem__(m.message_id, summary(m)),
+                                   principal=inbox_principal(s))
+        except Exception as e:  # noqa: BLE001
+            for k in keys:
+                out[k] = {"error": fail(e)}
+            continue
+        try:
+            for R in LANGS:
+                key = f"{R}-{LANG}-{s}"
+                r: dict = {}
+                out[key] = r
+                try:
+                    m = rd(f"msgs/p2/{key}.json")
+                    req = rd(f"msgs/p1/{LANG}-{R}-{s}.json")["request"]
+                    for k, env in (("decision", "decision"), ("decisionAgain", "decision"),
+                                   ("decision2", "decision2"), ("report", "report")):
+                        r[k] = outcome(inbox.receive(wire(m[env]), ace.ReceiveSource.direct()))
+                    r["decisionParsed"] = handed.get(m["decision"]["messageId"])
+                    r["reportParsed"] = handed.get(m["report"]["messageId"])
+                    r["ledger"] = attempt(lambda: {"record": ledger(load_request_record(store, req["conversationId"], req["messageId"]))})
+                except Exception as e:  # noqa: BLE001
+                    r["error"] = fail(e)
+        finally:
+            inbox.close()
+    wr(f"out/{LANG}/pdecide.json", out)
+
+
+def pload() -> None:
+    """Every delegate's ``requests/`` record of its request to this language, loaded here."""
+    out: dict = {}
+    for S in LANGS:
+        for s in SCHEMES:
+            key = f"{S}-{LANG}-{s}"
+            try:
+                req = rd(f"msgs/p1/{key}.json")["request"]
+                store = ace.FileStore(P(f"pstores/{S}-{s}"))
+                out[key] = attempt(lambda: {"record": ledger(load_request_record(store, req["conversationId"], req["messageId"]))})
+            except Exception as e:  # noqa: BLE001
+                out[key] = fail(e)
+    wr(f"out/{LANG}/pload.json", out)
+
+
+PHASES = {"gen": gen, "verify": verify, "send1": send1, "recv1": recv1, "recv2": recv2, "persist": persist, "load": load,
+          "pverify": pverify, "psend": psend, "precv": precv, "pdecide": pdecide, "pload": pload}
 PHASES[phase]()

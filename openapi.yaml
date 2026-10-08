@@ -190,6 +190,7 @@ paths:
   /v1/peer:
     get:
       summary: A verifiable peer record
+      description: 'A relay omits `profile.principal` from the served record once it has expired.'
       parameters: [ { name: aceId, in: query, required: true, schema: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' } } ]
       responses:
         "200": { description: Peer record, content: { application/json: { schema: { $ref: '#/components/schemas/PeerRecord' } } } }
@@ -200,13 +201,14 @@ paths:
   /v1/discover:
     get:
       summary: Search registered agents
+      description: 'Records are served without an expired `profile.principal`; with `account`, an agent whose principal has expired is not listed.'
       parameters:
         - { name: q, in: query, schema: { type: string, maxLength: 256 }, description: 'Full-text search on name, description, tags, capabilities' }
         - { name: tags, in: query, schema: { type: string, maxLength: 512 }, description: 'Comma-separated exact match (intersection) over tags and capabilities' }
         - { name: chain, in: query, schema: { type: string, maxLength: 128 }, description: CAIP-2 chain ID }
         - { name: scheme, in: query, schema: { type: string, enum: [ed25519, secp256k1] } }
         - { name: online, in: query, schema: { type: boolean }, description: Only agents with active relay connections }
-        - { name: account, in: query, schema: { type: string, maxLength: 175, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$' }, description: 'CAIP-10 account; exact match on profile.principal.account' }
+        - { name: account, in: query, schema: { type: string, maxLength: 175, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$' }, description: 'CAIP-10 account; lists the delegates that claim it (exact match on profile.principal.account). A relay MAY omit expired principals. A claim list, not proof of delegation' }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
         - { $ref: '#/components/parameters/Cursor' }
       responses:

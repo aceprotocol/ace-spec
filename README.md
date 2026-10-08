@@ -28,6 +28,8 @@ Layer 4: Settlement               → crypto/instant, fiat/*
 Layer 5: Reputation               → Transaction-anchored feedback, scoring, portability
 ```
 
+ACE is designed to run alongside A2A and MCP: an A2A Agent Card or MCP server can carry an ACE ID; ACE adds identity, encryption and settlement receipts to those agents.
+
 ### Comparison
 
 | Feature | ACE | Google A2A | Anthropic MCP |
@@ -35,7 +37,7 @@ Layer 5: Reputation               → Transaction-anchored feedback, scoring, po
 | E2E Encryption | X-Wing (X25519 + ML-KEM-768) + AES-256-GCM | No | No |
 | Identity Tiers | Key / Chain | Agent Card | Server manifest |
 | Payment Native | Yes (crypto + fiat) | No | No |
-| Hardware Security | Optional (SE/TPM/HSM) | No | N/A |
+| Key custody | self-asserted + verifiable principal binding | — | — |
 | Cross-Chain | Yes (signingScheme registry) | N/A | N/A |
 | Post-Quantum Encryption | Yes (hybrid KEM) | No | No |
 
@@ -48,7 +50,7 @@ Layer 5: Reputation               → Transaction-anchored feedback, scoring, po
 
 | Document | Description |
 |----------|-------------|
-| [01-identity.md](./01-identity.md) | Identity tiers, registration file format |
+| [01-identity.md](./01-identity.md) | Identity tiers, registration file format, principal field |
 | [02-discovery.md](./02-discovery.md) | Discovery mechanisms: direct, well-known, registry, ERC-8004 |
 | [03-encryption.md](./03-encryption.md) | X-Wing hybrid post-quantum KEM + HKDF-SHA256 + AES-256-GCM encryption scheme |
 | [04-messages.md](./04-messages.md) | Encoding rules, size limits, message envelope, types, economic schemas and state machine |
@@ -56,6 +58,7 @@ Layer 5: Reputation               → Transaction-anchored feedback, scoring, po
 | [06-security.md](./06-security.md) | Security model: processing pipeline, replay protection, durable delivery, SDK error codes |
 | [07-reputation.md](./07-reputation.md) | Reputation system: transaction-anchored feedback, scoring, anti-gaming |
 | [08-relay.md](./08-relay.md) | Relay HTTP API: registration, discovery, send, inbox, listen, intents, webhooks, errors; direct delivery; client rules |
+| [09-principal.md](./09-principal.md) | Principal binding (extension draft): principal record, `principal` signing context, same-account rules, `request` / `decision` / `report` |
 | [openapi.yaml](./openapi.yaml) | OpenAPI 3.1 rendering of the relay API (documentation; 08-relay.md is normative) |
 
 ## Signing Schemes

@@ -37,7 +37,7 @@ ACE is designed to run alongside A2A and MCP: an A2A Agent Card or MCP server ca
 | E2E Encryption | X-Wing (X25519 + ML-KEM-768) + AES-256-GCM | No | No |
 | Identity Tiers | Key / Chain | Agent Card | Server manifest |
 | Payment Native | Yes (crypto + fiat) | No | No |
-| Key custody | self-asserted + verifiable principal binding | — | — |
+| Key custody | self-asserted (`hardwareBacking`); principal binding is a verifiable delegation fact | — | — |
 | Cross-Chain | Yes (signingScheme registry) | N/A | N/A |
 | Post-Quantum Encryption | Yes (hybrid KEM) | No | No |
 

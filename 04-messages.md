@@ -8,7 +8,7 @@ Wherever this specification limits a string to N "characters", it counts Unicode
 
 ### Wire Integers
 
-Timestamps, `registeredAt`, `ttl` and `limit` are wire integers. A JSON number is a valid wire integer only if its mathematical value is an integer in `[0, 2^53-1]`. The lexical form does not matter: `1000`, `1000.0` and `1e3` are all accepted. Booleans, strings, `null` and non-finite values are rejected.
+Timestamps, `registeredAt`, `ttl`, `limit`, and the principal record's `issuedAt` and `expiresAt` are wire integers. A JSON number is a valid wire integer only if its mathematical value is an integer in `[0, 2^53-1]`. The lexical form does not matter: `1000`, `1000.0` and `1e3` are all accepted. Booleans, strings, `null` and non-finite values are rejected.
 
 `decimal(n)` denotes the base-10 representation of a wire integer with no sign and no leading zeros (`"0"` for zero).
 

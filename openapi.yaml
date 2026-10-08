@@ -45,7 +45,7 @@ components:
       required: [account, roles, signer, issuedAt, expiresAt, signature]
       properties:
         account: { type: string, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$', description: CAIP-10 }
-        roles: { type: array, minItems: 1, maxItems: 2, uniqueItems: true, items: { type: string, enum: [controller, agent] }, description: 'Canonical order: controller before agent' }
+        roles: { type: array, enum: [[controller], [agent], [controller, agent]], items: { type: string, enum: [controller, agent] }, description: 'Exactly one of the three arrays; canonical order: controller before agent' }
         signer:
           type: object
           required: [scheme, publicKey]
@@ -190,7 +190,7 @@ paths:
   /v1/peer:
     get:
       summary: A verifiable peer record
-      description: 'A relay omits `profile.principal` from the served record once it has expired.'
+      description: 'A relay SHOULD omit `profile.principal` from the served record once it has expired.'
       parameters: [ { name: aceId, in: query, required: true, schema: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' } } ]
       responses:
         "200": { description: Peer record, content: { application/json: { schema: { $ref: '#/components/schemas/PeerRecord' } } } }
@@ -201,14 +201,14 @@ paths:
   /v1/discover:
     get:
       summary: Search registered agents
-      description: 'Records are served without an expired `profile.principal`; with `account`, an agent whose principal has expired is not listed.'
+      description: 'A relay SHOULD serve records without an expired `profile.principal`; with `account`, it SHOULD NOT list an agent whose principal has expired.'
       parameters:
         - { name: q, in: query, schema: { type: string, maxLength: 256 }, description: 'Full-text search on name, description, tags, capabilities' }
         - { name: tags, in: query, schema: { type: string, maxLength: 512 }, description: 'Comma-separated exact match (intersection) over tags and capabilities' }
         - { name: chain, in: query, schema: { type: string, maxLength: 128 }, description: CAIP-2 chain ID }
         - { name: scheme, in: query, schema: { type: string, enum: [ed25519, secp256k1] } }
         - { name: online, in: query, schema: { type: boolean }, description: Only agents with active relay connections }
-        - { name: account, in: query, schema: { type: string, maxLength: 175, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$' }, description: 'CAIP-10 account; lists the delegates that claim it (exact match on profile.principal.account). A relay MAY omit expired principals. A claim list, not proof of delegation' }
+        - { name: account, in: query, schema: { type: string, maxLength: 170, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$' }, description: 'CAIP-10 account; lists the delegates that claim it (exact match on profile.principal.account). A relay SHOULD omit expired principals. A claim list, not proof of delegation: clients MUST apply the signer-binding step (09 § Same-Account Rules step 4) before treating an entry as a delegate' }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
         - { $ref: '#/components/parameters/Cursor' }
       responses:

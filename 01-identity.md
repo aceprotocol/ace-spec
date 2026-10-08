@@ -95,7 +95,7 @@ Every ACE agent SHOULD publish a registration file.
 | `description` | No | string | One-line description of the agent |
 | `endpoint` | Yes | string | URL for receiving ACE messages. MUST match the ACE HTTPS URL grammar ([04-messages.md](./04-messages.md) § Encoding Rules). The protocol does not prescribe the transport behind it (REST, WebSocket, SSE, gRPC, etc.) |
 | `tier` | Yes | integer | Identity tier: 0 or 1 |
-| `hardwareBacking` | No | string | Self-asserted key custody metadata, one of `secure-enclave`, `tpm`, `hsm`, `tee`. **It is not verifiable** and MUST NOT be used as a trust signal; verifiable custody facts come from the principal binding ([09-principal.md](./09-principal.md)). Orthogonal to trust tier. |
+| `hardwareBacking` | No | string | Self-asserted key custody metadata, one of `secure-enclave`, `tpm`, `hsm`, `tee`. **It is not verifiable** and MUST NOT be used as a trust signal; the principal binding ([09-principal.md](./09-principal.md)) is a verifiable delegation fact; custody (`hardwareBacking`) remains self-asserted. Orthogonal to trust tier. |
 | `signing` | Yes | object | Signing configuration |
 | `signing.scheme` | Yes | string | Signing scheme from the registry (e.g., `"ed25519"`, `"secp256k1"`) |
 | `signing.address` | Yes | string | Address derived from signing key (format depends on scheme; see § Validation) |
@@ -133,6 +133,6 @@ A registration file is valid only if all of the following hold. Validators MUST 
 6. `endpoint` matches the ACE HTTPS URL grammar.
 7. All Base64 fields are canonical ([04-messages.md](./04-messages.md) § Encoding Rules).
 8. `capabilities`, `settlement` and `chains`, if present, have the shapes in § Field Reference.
-9. `principal`, if present, passes [09-principal.md](./09-principal.md) § Validation with the signing key from rule 3 as the subject; a failure is `invalid_principal`.
+9. `principal`, if present (a `null` `principal` is absent), passes [09-principal.md](./09-principal.md) § Validation with the signing key from rule 3 as the subject; a failure is `invalid_principal`, except that a record failing ONLY step 10 (expiry) is treated as absent on fetch/load ([09-principal.md](./09-principal.md) § Validation, Expired-only records); registration still rejects it.
 
 A registration file carries no signed timestamp. A peer cache that pins one uses the time it was pinned in place of `registeredAt` ([02-discovery.md](./02-discovery.md) § Rollback Barrier).

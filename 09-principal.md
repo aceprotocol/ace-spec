@@ -12,7 +12,7 @@ ACE has two private channels and one public record:
 
 The transport does not distinguish them: every message is end-to-end encrypted and point-to-point.
 
-The binding is chain-agnostic. `account` names the account (CAIP-10); `signer` is the key that signed the attestation, normally the account's root, owner or authority key. Verifiers MUST verify the signature. Verifiers MAY additionally read the chain to confirm that `signer.publicKey` is an authority of `account`; this specification does not define how.
+The binding is chain-agnostic. `account` names the account (CAIP-10); `signer` is the key that signed the attestation, normally the account's root, owner or authority key. Verifiers MUST verify the signature. Verifiers MAY read the chain to learn which keys control `account` and use them as the trusted-signer set; this specification does not define how. Whatever its source, the signer-binding step (§ Same-Account Rules step 4) is mandatory.
 
 ## Principal Record
 
@@ -141,9 +141,9 @@ SDKs keep one record per sent `request` ([06-security.md](./06-security.md) § A
 | Code | Category | Meaning |
 |------|----------|---------|
 | `invalid_principal` | permanent | A principal record fails § Validation (registration, peer record, registration file, local creation) |
-| `wrong_principal` | permanent | A principal message fails § Same-Account Rules 1–6, or the sender check of step 7 |
+| `wrong_principal` | permanent | A principal message fails § Same-Account Rules 1–6, or step 7 because the `decision` sender is not the referenced record's `to` |
 
-A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md) § Errors). `bad_reference` is reused for rule 7.
+A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md) § Errors). `bad_reference` is reused for rule 7 when the referenced request is unknown, already decided, or expired.
 
 ## Security Considerations
 
@@ -152,4 +152,4 @@ A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md
 - **Withdrawal and revocation.** A record binds only the subject's signing key; it carries no registration timestamp. So (a) a compromised subject holding the key can re-register an unexpired record, and (b) a relay, which does not cover the profile with the binding signature, can re-attach a withdrawn but unexpired record. Re-registering without the principal therefore withdraws it only against honest relays; for a compromised subject, `expiresAt` is the only protocol-level revocation, which is why it is required and bounded. Verifiers MAY additionally check on-chain that `signer.publicKey` is still an authority of `account` and treat loss of authority as revocation.
 - **Account strings are not self-certifying.** A principal record can name any `account`; without the signer-binding step above, any key could mint a record claiming to belong to a victim's account and pass the same-account rule. The binding step is therefore mandatory and the trusted-signer set MUST only contain keys the host has verified to control the account.
 - **Key custody.** `hardwareBacking` is self-asserted and not verifiable ([01-identity.md](./01-identity.md)); the principal binding is the verifiable custody fact.
-- **Authority.** The protocol proves that `signer` signed; whether `signer` controls `account` on its chain is a MAY check for verifiers.
+- **Authority.** The protocol proves that `signer` signed; whether `signer` controls `account` is established by the mandatory signer-binding step (§ Same-Account Rules step 4). Reading the chain is a MAY, as a means of populating the trusted-signer set.

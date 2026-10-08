@@ -14,8 +14,8 @@ The companion [`openapi.yaml`](./openapi.yaml) describes this API in OpenAPI 3.1
 |----------|------|---------|--------------|
 | `POST /v1/register` | In body | RegistrationRequest ([02-discovery.md](./02-discovery.md) § Registration authorization) | `{"ok":true,"status":"registered"\|"idempotent"\|"refreshed"\|"rotated"}` |
 | `POST /v1/unregister` | Headers, action `unregister` | No body | `{"ok":true}` |
-| `GET /v1/peer?aceId=` | None | | PeerRecord ([02-discovery.md](./02-discovery.md) § Peer Record) |
-| `GET /v1/discover?q&tags&chain&scheme&online&account&limit&cursor` | None | Parameters: [02-discovery.md](./02-discovery.md) § Search Parameters | `{"agents":[PeerRecord],"cursor":string\|null}` |
+| `GET /v1/peer?aceId=` | None | | PeerRecord ([02-discovery.md](./02-discovery.md) § Peer Record). A relay SHOULD omit a `principal` whose `expiresAt <= now` |
+| `GET /v1/discover?q&tags&chain&scheme&online&account&limit&cursor` | None | Parameters: [02-discovery.md](./02-discovery.md) § Search Parameters | `{"agents":[PeerRecord],"cursor":string\|null}`. A relay SHOULD omit a `principal` whose `expiresAt <= now` |
 | `POST /v1/send` | Message signature | `{"message":Envelope}` | `{"ok":true}` |
 | `GET /v1/inbox?since&limit` | Headers, action `inbox` | See § Inbox | `{"messages":[{"streamId","message":Envelope}],"cursor":string\|null}` |
 | `GET /v1/listen?since` | Headers, action `listen` | See § Listen | `text/event-stream` |
@@ -56,7 +56,7 @@ The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-
 | `refreshed` | Newer timestamp, same encryption key |
 | `rotated` | Newer timestamp, different encryption key |
 
-An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`). The relay stores only the members of `principal` defined in [09-principal.md](./09-principal.md) § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape.
+An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. A relay rejects an expired principal at registration (`invalid_principal`; the expired-only exception in [09-principal.md](./09-principal.md) § Validation applies only to fetched records). The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`). The relay stores only the members of `principal` defined in [09-principal.md](./09-principal.md) § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape.
 
 `POST /v1/unregister` removes the identity and profile and closes the caller's listen streams. Its auth timestamp MUST be strictly greater than the stored registration timestamp, else 409 `identity_conflict`. The relay retains it as a timestamp barrier so an older registration request cannot resurrect the identity.
 

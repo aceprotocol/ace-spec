@@ -80,9 +80,11 @@ signData = buildSignData("principal", subjectAceId, issuedAt,
 Where records are validated:
 
 - A relay validates `profile.principal` before writing a registration ([08-relay.md](./08-relay.md) § Registration), with `now` = its clock.
-- A client validates the principal of a peer record or registration file when it verifies it ([02-discovery.md](./02-discovery.md) § Peer Record, [01-identity.md](./01-identity.md) § Validation). A failure rejects the whole record with `invalid_principal`.
+- A client validates the principal of a peer record or registration file when it verifies it ([02-discovery.md](./02-discovery.md) § Peer Record, [01-identity.md](./01-identity.md) § Validation). A failure rejects the whole record with `invalid_principal`, except an expired-only principal (see Expired-only records below).
 - A peer cache that re-verifies a stored binding uses the time the binding was verified (`fetchedAt`) as `now`, so a principal that has expired since does not make the cache unreadable.
 - The receive pipeline re-validates the sender's principal with the current time at step 7 (§ Same-Account Rules).
+
+**Expired-only records.** When a verifier validates a principal carried by a *fetched* peer record or registration file and the record fails **only** step 10 (`expiresAt <= now`) — every other step passing — the verifier MUST treat the principal as absent (the profile is used without it and the record remains valid), rather than rejecting the whole record with `invalid_principal`: expiry revokes the delegate's principal, it does not make the agent unreachable. Any other failure still invalidates the record. This exception does not apply to `POST /v1/register` (a relay rejects an expired principal at registration) nor to `createPrincipalRecord`.
 
 There is no revocation list. `expiresAt` is required and bounded (see § Security Considerations).
 

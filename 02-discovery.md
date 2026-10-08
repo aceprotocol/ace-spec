@@ -78,7 +78,7 @@ All fields use the existing four-byte big-endian length prefix; there is no JSON
 serialization dependency. Unknown top-level profile fields are ignored and not stored. `pricing` may contain only `currency` and `maxAmount`; any other `pricing` field makes the profile invalid (`invalid_profile`), because the registration authorization covers only those two. Implementations
 SHOULD use the SDK registration builder instead of implementing this encoding.
 
-A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`) before writing. The relay stores only the members of `principal` defined in 09 § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape. Identity,
+A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`; a relay rejects an expired principal at registration, the expired-only exception in [09-principal.md](./09-principal.md) § Validation (Expired-only records) applies only to fetched records) before writing. The relay stores only the members of `principal` defined in 09 § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape. Identity,
 profile and discovery indexes MUST update atomically. A newer mutation requires a
 strictly greater signed timestamp; an equal timestamp is accepted only for the same
 canonical mutation (idempotent retry), and older requests are rejected with 409
@@ -113,7 +113,7 @@ MUST verify a peer record before using it:
 4. `registrationSignature` verifies over
    `buildSignData("register", aceId, registeredAt, encodePayload(encryptionPublicKey, signingPublicKey))`.
 
-`profile` is unverified, self-asserted metadata. Unknown fields are ignored. Exception: when `profile.principal` is present the client MUST validate it ([09-principal.md](./09-principal.md) § Validation, subject = this record's signing key); a failure rejects the record with `invalid_principal`.
+`profile` is unverified, self-asserted metadata. Unknown fields are ignored. Exception: when `profile.principal` is present the client MUST validate it ([09-principal.md](./09-principal.md) § Validation, subject = this record's signing key); a failure rejects the record with `invalid_principal`, except that an expired-only principal is treated as absent ([09-principal.md](./09-principal.md) § Validation (Expired-only records)).
 
 #### Rollback Barrier
 
@@ -126,7 +126,7 @@ A peer cache pins at most one binding `(scheme, signingPublicKey, encryptionPubl
 - A different signing key or scheme for the same ACE ID is invalid.
 - Cache TTL expiry (24 hours recommended) only triggers a refresh. It MUST NOT remove the pin.
 - A registration file signs neither its encryption key nor a timestamp. It is adopted only when no pin exists or its encryption key equals the pin; it MUST NOT rotate a pinned key. When it is first pinned, the pin time stands in for `registeredAt`.
-- A **relay peer record** (which carries a verified `registrationSignature` and `registeredAt`) that is adopted or kept replaces the cached profile, including `principal`, **only when its `registeredAt` is greater than or equal to the pinned `registeredAt`**; a kept candidate with an older `registeredAt` refreshes `fetchedAt` but leaves the cached profile unchanged (a relay replaying an older record cannot roll a profile or principal back). Within a replacing relay profile, a `principal` replaces the cached one under the same `issuedAt` rule; a relay profile without a `principal` removes it (withdrawal re-registers with a newer `registeredAt`).
+- A **relay peer record** (which carries a verified `registrationSignature` and `registeredAt`) that is adopted or kept replaces the cached profile, including `principal`, **only when its `registeredAt` is greater than or equal to the pinned `registeredAt`**; a kept candidate with an older `registeredAt` refreshes `fetchedAt` but leaves the cached profile unchanged (a relay replaying an older record cannot roll a profile or principal back). Within a replacing relay profile, a `principal` replaces the cached one under the same `issuedAt` rule; a relay profile without a `principal` removes it (withdrawal re-registers with a newer `registeredAt`); a relay profile whose principal is dropped as expired-only is treated as a profile without a principal.
 - A **registration file** (no signed timestamp) replaces the other profile members, but it MUST NOT remove a cached `principal`. Its top-level `principal` is stored as `profile.principal` ([06-security.md](./06-security.md) § Appendix A, `peers/` row) only when it validates ([09-principal.md](./09-principal.md) § Validation) and its `issuedAt` is greater than the cached one's, or equal with a byte-identical record; otherwise the cached `principal` is kept and `fetchedAt` is still refreshed. An attacker who can answer at the agent's `endpoint` could otherwise strip a delegate's principal and silence its principal messages (`wrong_principal`); forging or upgrading a principal remains impossible without the signer's key. A cached `principal` whose `expiresAt <= now` is not carried over — it is dropped at that point (expiry is revocation, [09-principal.md](./09-principal.md) § Security Considerations) — so that re-verification of the pin at its refreshed `fetchedAt` cannot fail.
 
 #### Profile Fields
@@ -161,6 +161,8 @@ All fields are optional:
 | `account` | CAIP-10 account; exact match on `profile.principal.account`. Lists every registered delegate of that account. A relay MAY omit records whose `principal.expiresAt <= now`; clients MUST still verify the record |
 | `limit` | Results per page (default 20, max 100) |
 | `cursor` | Pagination cursor |
+
+A relay SHOULD omit a `principal` whose `expiresAt <= now` when serving peer records and discovery results.
 
 Profile is self-asserted metadata, except `principal`, which is verified ([09-principal.md](./09-principal.md)) — connecting agents SHOULD verify the registration file at the agent's endpoint before trusting any claims.
 

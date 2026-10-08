@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import dataclasses
 import hashlib
 import json
 import os
@@ -51,7 +52,6 @@ from ace.encryption import ACE_KEM_SALT, compute_conversation_id
 from ace.messages import decode_body
 from ace.registration import registration_payload
 from ace.state_machine import ThreadEvent, ThreadState
-import dataclasses
 from ace.principal import (
     PrincipalSigner,
     check_principal_rules,
@@ -70,7 +70,6 @@ _args.add_argument("--out", default=os.path.normpath(os.path.join(HERE, "..", "t
                    help="output path (default: ace-spec/test-vectors.json)")
 OUT = _args.parse_args().out
 ECONOMIC = ["rfq", "offer", "accept", "reject", "invoice", "receipt", "deliver", "confirm"]
-PRINCIPAL = ["request", "decision", "report"]
 
 
 def b64(data: bytes) -> str:
@@ -391,6 +390,7 @@ add_body("request all optionals", "request", j({**MINIMAL["request"], "ref": {**
 add_body("request optional nulls", "request", j({**MINIMAL["request"], "ref": None, "amount": None, "currency": None,
                                                 "details": None, "ttl": None}), True)
 add_body("request ref without threadId", "request", j({**MINIMAL["request"], "ref": _REF}), True)
+add_body("request ref unknown member ignored", "request", j({**MINIMAL["request"], "ref": {**_REF, "extra": {"x": 1}}}), True)
 add_body("request ref threadId null", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": None}}), True)
 add_body("request ref threadId empty", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": ""}}), False)
 add_body("request ref threadId 257 code points", "request", j({**MINIMAL["request"], "ref": {**_REF, "threadId": "é" * 257}}), False)
@@ -818,6 +818,9 @@ owner_secp = SoftwareIdentity("secp256k1", seed("principal-owner-secp256k1"), se
 attacker_ed = SoftwareIdentity("ed25519", seed("principal-attacker-ed25519"), seed("principal-attacker-ed25519-enc"))
 attacker_secp = SoftwareIdentity("secp256k1", seed("principal-attacker-secp256k1"), seed("principal-attacker-secp256k1-enc"))
 EIP_ACCOUNT = "eip155:8453:" + owner_secp.get_address()
+EIP_ACCOUNT_LOWER = "eip155:8453:" + owner_secp.get_address().lower()
+EIP_ACCOUNT_UPPER = "eip155:8453:0x" + owner_secp.get_address()[2:].upper()
+assert len({EIP_ACCOUNT, EIP_ACCOUNT_LOWER, EIP_ACCOUNT_UPPER}) == 3  # checksummed, lowercase, uppercase hex
 
 
 def signer(ident: SoftwareIdentity) -> PrincipalSigner:
@@ -958,15 +961,17 @@ for name, rec_d, subject_key in principal_invalid_cases:
     principal_invalid.append({"name": name, "subjectSigningPublicKey": b64(subject_key), "record": rec_d,
                               "now": TIMESTAMP, "error": "invalid_principal"})
 principal_section = {
-    "rules": "validatePrincipalRecord(record, base64decode(subjectSigningPublicKey), now) for every entry (valid "
-             "entries use this section's now). Valid entries also reproduce payloadHex / signDataHex "
-             "(09 § Signing Context); invalid entries fail with invalid_principal. "
+    "rules": "validatePrincipalRecord(record, base64decode(subjectSigningPublicKey), now) for every entry; an "
+             "entry's own now is authoritative, valid entries (which carry none) use this section's now. Valid "
+             "entries also reproduce payloadHex / signDataHex (09 § Signing Context); invalid entries fail with "
+             "the error code in error (invalid_principal). "
              "vectors.auth also holds entries with action == \"principal\": they carry no headers, so header "
              "runners skip them; a principal runner checks payloadHex = encodePayload(request.account, "
              "join(request.roles, \",\"), request.signerScheme, request.signerPublicKey, "
              "request.subjectSigningPublicKey, request.scope or \"\", decimal(request.expiresAt)), "
              "signDataHex = buildSignData(\"principal\", request.subjectAceId, timestamp, payload), "
-             "validatePrincipalRecord(record, subjectSigningPublicKey, now) succeeds, and (unless verifyOnly) "
+             "validatePrincipalRecord(record, base64decode(subjectSigningPublicKey), now) succeeds (now = the entry's now), "
+             "and (unless verifyOnly) "
              "createPrincipalRecord with the agent's signing key, issuedAt = timestamp reproduces record exactly.",
     "account": ACCOUNT, "now": TIMESTAMP, "valid": principal_valid, "invalid": principal_invalid,
 }
@@ -985,6 +990,8 @@ sender_ids = {
     "eipAgent": SoftwareIdentity("ed25519", seed("pr-eip-agent"), seed("pr-eip-agent-enc")),
     "eipWrongAddress": SoftwareIdentity("ed25519", seed("pr-eip-wrong"), seed("pr-eip-wrong-enc")),
     "eipEd25519Signer": SoftwareIdentity("ed25519", seed("pr-eip-ed"), seed("pr-eip-ed-enc")),
+    "eipAgentLowercase": SoftwareIdentity("ed25519", seed("pr-eip-lower"), seed("pr-eip-lower-enc")),
+    "eipAgentUppercase": SoftwareIdentity("secp256k1", seed("pr-eip-upper"), seed("pr-eip-upper-enc")),
 }
 _spk = {k: v.get_signing_public_key() for k, v in sender_ids.items()}
 senders = {
@@ -1000,6 +1007,8 @@ senders = {
     "eipAgent": raw_record(owner_secp, _spk["eipAgent"], account=EIP_ACCOUNT, roles=("agent",)),
     "eipWrongAddress": raw_record(attacker_secp, _spk["eipWrongAddress"], account=EIP_ACCOUNT, roles=("agent",)),
     "eipEd25519Signer": raw_record(owner_ed, _spk["eipEd25519Signer"], account=EIP_ACCOUNT, roles=("agent",)),
+    "eipAgentLowercase": raw_record(owner_secp, _spk["eipAgentLowercase"], account=EIP_ACCOUNT_LOWER, roles=("agent",)),
+    "eipAgentUppercase": raw_record(owner_secp, _spk["eipAgentUppercase"], account=EIP_ACCOUNT_UPPER, roles=("agent",)),
 }
 SELF_SIGNER = pkey(owner_ed)
 CTRL = sender_ids["controller"].get_ace_id()
@@ -1036,6 +1045,10 @@ rule_cases_spec = [
      [("trustedSigner", "request", REQ, WP)]),
     ("signer binding: eip155 address derivation", recv(account=EIP_ACCOUNT, self_signer=None), {},
      [("eipAgent", "request", REQ, "ok")]),
+    ("signer binding: eip155 lowercase account address (case-insensitive)",
+     recv(account=EIP_ACCOUNT_LOWER, self_signer=None), {}, [("eipAgentLowercase", "request", REQ, "ok")]),
+    ("signer binding: eip155 uppercase-hex account address (case-insensitive)",
+     recv(account=EIP_ACCOUNT_UPPER, self_signer=None), {}, [("eipAgentUppercase", "report", REP, "ok")]),
     ("signer binding: eip155 address mismatch", recv(account=EIP_ACCOUNT, self_signer=None), {},
      [("eipWrongAddress", "request", REQ, WP)]),
     ("signer binding: eip155 with an ed25519 signer", recv(account=EIP_ACCOUNT, self_signer=None), {},
@@ -1092,7 +1105,9 @@ principal_rules = {
              "senders[sender].principal, base64decode(senders[sender].signingPublicKey), selfAccount, "
              "openRequestTo, now, selfSigner, trustedSigners), where openRequestTo(c, r, now) returns open[r].to when "
              "c == conversationId, r is in the map and (expiresAt is null or now <= expiresAt), else null. "
-             "'ok' = no error; an accepted decision removes body.requestId from the map. selfAccount null = the "
+             "expect is 'ok' (no error) or 'error:<code>' (the ACE error code); an accepted decision removes "
+             "body.requestId from the map. Each case's now is authoritative (the section-level now is the default "
+             "for a case that omits it). selfAccount null = the "
              "receiver has no principal; selfSigner null and trustedSigners [] = no authority keys besides eip155 "
              "address derivation. Every body passes validateBody.",
     "now": TIMESTAMP, "conversationId": conversation_id, "account": ACCOUNT,
@@ -1122,7 +1137,8 @@ for name, ident in (("alice", alice), ("bob", bob)):
         verified = verify_registration_request(json.loads(json.dumps(request)), clock=lambda: TIMESTAMP)
         assert verified.request_digest == hashlib.sha256(sd).hexdigest()
         registration_vectors.append({"agent": name, "mode": mode, "now": TIMESTAMP, "request": request,
-                                     "signDataHex": sd.hex(), "requestDigest": verified.request_digest})
+                                     "payloadHex": payload.hex(), "signDataHex": sd.hex(),
+                                     "requestDigest": verified.request_digest})
 
 
 def payload_fields(payload: bytes) -> list[bytes]:
@@ -1153,7 +1169,8 @@ _sd_p = build_sign_data("register-request", _req_p["aceId"], TIMESTAMP, _payload
 _ver_p = verify_registration_request(json.loads(json.dumps(_req_p)), clock=lambda: TIMESTAMP)
 assert _ver_p.request_digest == hashlib.sha256(_sd_p).hexdigest() and _ver_p.peer.principal is not None
 registration_vectors.append({"agent": "alice", "mode": "replace-principal", "now": TIMESTAMP, "request": _req_p,
-                             "signDataHex": _sd_p.hex(), "requestDigest": _ver_p.request_digest})
+                             "payloadHex": _payload_p.hex(), "signDataHex": _sd_p.hex(),
+                             "requestDigest": _ver_p.request_digest})
 
 
 def manual_request(ident: SoftwareIdentity, *, enc: bytes | None = None, ts: int = TIMESTAMP, profile=_KEEP,
@@ -1166,12 +1183,17 @@ def manual_request(ident: SoftwareIdentity, *, enc: bytes | None = None, ts: int
     from ace.registration import _KEEP as SDK_KEEP
     ap = profile if auth_profile is ... else auth_profile  # default (...): authorize what is sent
     ap_obj = SDK_KEEP if ap is _KEEP else None if ap is None else AgentProfile.from_dict(ap)
-    auth = ident.sign(build_sign_data("register-request", ident.get_ace_id(), ts, registration_payload(epk, spk, scheme, ap_obj)))
+    auth_payload = registration_payload(epk, spk, scheme, ap_obj)
+    auth = ident.sign(build_sign_data("register-request", ident.get_ace_id(), ts, auth_payload))
     req = {"aceId": ident.get_ace_id(), "encryptionPublicKey": epk, "signingPublicKey": spk, "scheme": scheme,
            "timestamp": ts, "signature": encode_signature(sig, scheme), "authorization": encode_signature(auth, scheme)}
     if profile is not _KEEP:
         req["profile"] = profile
+    _SIGNED_PAYLOAD[req["authorization"]] = auth_payload
     return req
+
+
+_SIGNED_PAYLOAD: dict[str, bytes] = {}  # authorization -> the registration payload it signs
 
 
 _r = manual_request(alice)
@@ -1195,6 +1217,9 @@ registration_errors = [
     ("profile principal expired",
      manual_request(alice, profile={"name": "A", "principal": raw_record(owner_ed, A_SPK, expires_at=TIMESTAMP)}),
      TIMESTAMP, "invalid_principal"),
+    ("profile principal not an object",
+     manual_request(alice, profile={"name": "A", "principal": "x"}, auth_profile=None),
+     TIMESTAMP, "invalid_principal"),
     ("profile principal without expiresAt",
      manual_request(alice, profile={"name": "A", "principal": {k: v for k, v in raw_record(owner_ed, A_SPK).items()
                                                                if k != "expiresAt"}}, auth_profile=None),
@@ -1204,7 +1229,9 @@ verify_registration_request(_r, clock=lambda: TIMESTAMP + 300)  # the window bou
 registration_error_vectors = []
 for name, req, now, code in registration_errors:
     expect_error(lambda: verify_registration_request(json.loads(json.dumps(req)), clock=lambda: now), code)
-    registration_error_vectors.append({"name": name, "now": now, "request": req, "error": code})
+    _sp = _SIGNED_PAYLOAD.get(req.get("authorization"))
+    registration_error_vectors.append({"name": name, "now": now, "request": req,
+                                       "payloadHex": None if _sp is None else _sp.hex(), "error": code})
 
 # =====================================================================================
 # urls / base64

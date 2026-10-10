@@ -47,6 +47,8 @@ Every ACE agent SHOULD publish a registration file.
 ```json
 {
   "ace": "1.0",
+  "registeredAt": 1741000000,
+  "registrationSignature": "<signature of the key binding>",
   "id": "ace:sha256:e3b0c442...",
   "name": "DataAnalyzer",
   "description": "Real-time market data analysis agent",
@@ -65,23 +67,16 @@ Every ACE agent SHOULD publish a registration file.
       "id": "market-analysis",
       "description": "Analyze market trends from on-chain data",
       "input": "application/json",
-      "output": "application/json",
-      "pricing": {
-        "model": "per-call",
-        "amount": "0.01",
-        "currency": "USD"
-      }
+      "output": "application/json"
     }
   ],
 
-  "settlement": ["crypto/instant"],
-
-  "chains": [
-    {
-      "network": "eip155:8453",
-      "address": "0x7a3b...f91c"
+  "ext": {
+    "urn:ace:commerce:1": {
+      "settlement": ["crypto/instant"],
+      "accounts": [{ "network": "eip155:8453", "address": "0x7a3b...f91c" }]
     }
-  ]
+  }
 }
 ```
 
@@ -90,6 +85,8 @@ Every ACE agent SHOULD publish a registration file.
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `ace` | Yes | string | Protocol version. MUST be `"1.0"` |
+| `registeredAt` | Yes | integer | Signed key-binding timestamp, a wire integer |
+| `registrationSignature` | Yes | string | Signature over the `register` binding below, encoded for `signing.scheme` |
 | `id` | Yes | string | ACE ID. MUST equal `ace:sha256:hex(SHA-256(signingPublicKey))` (see § Validation) |
 | `name` | Yes | string | Human-readable agent name. Non-empty, no control characters (U+0000–U+001F, U+007F); no length limit |
 | `description` | No | string | One-line description of the agent |
@@ -102,8 +99,7 @@ Every ACE agent SHOULD publish a registration file.
 | `signing.signingPublicKey` | Conditional | string | Canonical Base64 of the raw signing public key. REQUIRED for `secp256k1` (the address is a hash): a 33-byte compressed point. Optional for `ed25519` (the address IS the public key in Base58); if present it MUST equal `Base58Decode(address)`. |
 | `signing.encryptionPublicKey` | Yes | string | Canonical Base64 of the X-Wing public key (exactly 1216 bytes) for E2E encryption. Validators MUST reject any other length. |
 | `capabilities` | No | array | Capability objects (see below); each MUST have string `id` and `description` |
-| `settlement` | No | array | Array of strings: supported settlement methods (e.g., `["crypto/instant", "fiat/*"]`) |
-| `chains` | No | array | Objects with string `network` (CAIP-2) and string `address`: blockchain addresses for receiving payments |
+| `ext` | No | object | Namespaced extensions, same rules as a relay profile's `ext` ([02-discovery.md](./02-discovery.md) § Profile Fields). Payment addresses, settlement methods and prices belong to the bundled commerce extension `urn:ace:commerce:1` ([04-messages.md](./04-messages.md) § Commerce extension), never to the identity file itself |
 | `principal` | No | object | Principal record ([09-principal.md](./09-principal.md)) whose subject is this file's signing key |
 
 ### Capability Object
@@ -114,10 +110,6 @@ Every ACE agent SHOULD publish a registration file.
 | `description` | Yes | string | What this capability does |
 | `input` | No | string | Expected input MIME type |
 | `output` | No | string | Output MIME type |
-| `pricing` | No | object | Pricing information |
-| `pricing.model` | Yes | string | `"per-call"`, `"per-token"`, `"per-hour"`, `"flat"` |
-| `pricing.amount` | Yes | string | Price amount (string to avoid floating point) |
-| `pricing.currency` | Yes | string | Currency code (`"USD"`, `"USDC"`, `"ETH"`, etc.) |
 
 ### Validation
 
@@ -129,10 +121,10 @@ A registration file is valid only if all of the following hold. Validators MUST 
    - `ed25519`: `Base58Decode(signing.address)`, which MUST be 32 bytes. If `signing.signingPublicKey` is present it MUST decode to the same 32 bytes.
    - `secp256k1`: `signing.signingPublicKey` MUST decode to a 33-byte compressed point (prefix `02` or `03`, on the curve). `signing.address` MUST equal the address derived from that key ([signing-schemes/secp256k1.md](./signing-schemes/secp256k1.md)), compared case-insensitively (both sides lowercased).
 4. `id` MUST equal `ace:sha256:hex(SHA-256(signingPublicKey))` over the key from rule 3.
-5. `signing.encryptionPublicKey` decodes to exactly 1216 bytes.
+5. `signing.encryptionPublicKey` decodes to exactly 1216 bytes. `registeredAt` is a wire integer and `registrationSignature` verifies with the signing key over `buildSignData("register", id, registeredAt, encodePayload(signing.encryptionPublicKey, Base64(signingPublicKey)))`. Missing, invalid or tampered proofs are `invalid_registration`.
 6. `endpoint` matches the ACE HTTPS URL grammar.
 7. All Base64 fields are canonical ([04-messages.md](./04-messages.md) § Encoding Rules).
-8. `capabilities`, `settlement` and `chains`, if present, have the shapes in § Field Reference.
+8. `capabilities` and `ext`, if present, have their documented shapes: `capabilities` is an array of objects, each with a string `id` and `description`; `ext` follows [02-discovery.md](./02-discovery.md) § Profile Fields, and its `urn:ace:commerce:1` member, when present, [04-messages.md](./04-messages.md) § Commerce extension (a failure is `invalid_profile`).
 9. `principal`, if present (a `null` `principal` is absent), passes [09-principal.md](./09-principal.md) § Validation with the signing key from rule 3 as the subject; a failure is `invalid_principal`, except that a record failing ONLY step 10 (expiry) is treated as absent on fetch/load ([09-principal.md](./09-principal.md) § Validation, Expired-only records); registration still rejects it.
 
-A registration file carries no signed timestamp. A peer cache that pins one uses the time it was pinned in place of `registeredAt` ([02-discovery.md](./02-discovery.md) § Rollback Barrier).
+Every discovery source carries the same cryptographic key-binding proof. `registeredAt` comes from that signed proof, never from a local pin-time override. The proof authenticates the keys, not the display metadata, endpoint or claimed capabilities. The rollback barrier applies equally to files and relay records ([02-discovery.md](./02-discovery.md)).

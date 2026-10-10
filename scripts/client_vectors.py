@@ -292,7 +292,7 @@ DIRECT = [
     ("message string", _j({"message": "x"}), None, 400, "invalid_envelope"),
     ("message array", _j({"message": []}), None, 400, "invalid_envelope"),
     ("message empty object", _j({"message": {}}), None, 400, "invalid_envelope"),
-    ("message missing envelope fields", _j({"message": {"ace": "1.0"}}), None, 400, "invalid_envelope"),
+    ("message missing envelope fields", _j({"message": {"ace": "2.0"}}), None, 400, "invalid_envelope"),
     ("unknown request member ignored", _j({"message": {}, "extra": 1}), None, 400, "invalid_envelope"),
     ("body of exactly MAX_DIRECT_BODY_BYTES", _j({"message": 5}), MAX_DIRECT_BODY_BYTES, 400, "invalid_envelope"),
     ("body of MAX_DIRECT_BODY_BYTES + 1", _j({"message": 5}), MAX_DIRECT_BODY_BYTES + 1, 413, "payload_too_large"),
@@ -316,7 +316,7 @@ def _direct() -> dict:
     return {
         "rules": (
             "Request bytes are UTF-8('body') or hex-decoded 'bodyHex', then right-padded with ASCII spaces "
-            "(0x20) to 'padTo' bytes when given. Pass them to inbox.receiveDirect on an open Inbox of any "
+            "(0x20) to 'padTo' bytes when given. Pass them to SecureMailbox.receiveDirect (receive_direct) of an open mailbox of any "
             "identity. The reply has HTTP status 'status' and body {ok: false, error: 'error'}."
         ),
         "maxDirectBodyBytes": MAX_DIRECT_BODY_BYTES,

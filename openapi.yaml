@@ -45,7 +45,7 @@ components:
       required: [account, roles, signer, issuedAt, expiresAt, signature]
       properties:
         account: { type: string, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$', description: CAIP-10 }
-        roles: { type: array, enum: [[controller], [agent], [controller, agent]], items: { type: string, enum: [controller, agent] }, description: 'Exactly one of the three arrays; canonical order: controller before agent' }
+        roles: { type: array, enum: [[controller], [delegate], [controller, delegate]], items: { type: string, enum: [controller, delegate] }, description: 'Exactly one of the three arrays; canonical order: controller before delegate' }
         signer:
           type: object
           required: [scheme, publicKey]
@@ -64,16 +64,14 @@ components:
         description: { type: string, maxLength: 256 }
         tags: { type: array, maxItems: 10, items: { type: string, pattern: '^[a-z0-9-]{1,32}$' } }
         capabilities: { type: array, maxItems: 20, items: { type: string, pattern: '^[a-z0-9-]{1,32}$' } }
-        chains: { type: array, maxItems: 10, items: { type: string, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$' } }
         image: { $ref: '#/components/schemas/HttpsUrl' }
         endpoint: { $ref: '#/components/schemas/HttpsUrl' }
-        pricing:
+        ext:
           type: object
-          additionalProperties: false
-          required: [currency]
-          properties:
-            currency: { type: string, minLength: 1, maxLength: 16, description: No control characters }
-            maxAmount: { type: string, minLength: 1, maxLength: 32, pattern: '^[0-9]+(\.[0-9]+)?$' }
+          maxProperties: 8
+          description: 'Namespaced extensions (02-discovery.md § Profile Fields): keys match the 04 namespaced-identifier grammar, values are objects, canonical JSON at most 4096 bytes, depth at most 8. Stored and served in canonical form, never indexed. Bundled: urn:ace:commerce:1 (04-messages.md § Commerce extension)'
+          propertyNames: { type: string, pattern: "^[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+$", maxLength: 256 }
+          additionalProperties: { type: object }
         principal: { $ref: '#/components/schemas/Principal' }
     RegistrationRequest:
       type: object
@@ -105,15 +103,19 @@ components:
     Envelope:
       type: object
       description: 04-messages.md § Message Envelope and § Envelope Decoding. Unknown fields are dropped by the relay.
-      required: [ace, messageId, from, to, conversationId, type, timestamp, encryption, signature]
+      required: [ace, messageId, from, to, conversationId, timestamp, encryption, signature]
+      not:
+        anyOf:
+          - required: [type]
+          - required: [threadId]
+          - required: [body]
+          - required: [schemaDigest]
       properties:
-        ace: { type: string, const: "1.0" }
+        ace: { type: string, const: "2.0" }
         messageId: { type: string, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' }
         from: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' }
         to: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' }
         conversationId: { type: string, pattern: '^[0-9a-f]{64}$' }
-        type: { type: string, enum: [info, text, rfq, offer, accept, reject, invoice, receipt, deliver, confirm, request, decision, report] }
-        threadId: { type: string, minLength: 1, maxLength: 256, description: 'No U+0000-U+001F or U+007F; required for economic types' }
         timestamp: { type: integer, minimum: 0, maximum: 9007199254740991 }
         encryption:
           type: object
@@ -135,9 +137,8 @@ components:
         from: { type: string, pattern: '^ace:sha256:[0-9a-f]{64}$' }
         need: { type: string }
         tags: { type: array, items: { type: string } }
-        maxPrice: { type: string }
-        currency: { type: string }
         ttl: { type: integer, minimum: 0, maximum: 9007199254740991, description: Seconds }
+        ext: { type: object, description: 'Namespaced extensions as submitted (canonical form); urn:ace:commerce:1 carries maxPrice and currency' }
         createdAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds }
         expiresAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds }
     Webhook:
@@ -205,7 +206,6 @@ paths:
       parameters:
         - { name: q, in: query, schema: { type: string, maxLength: 256 }, description: 'Full-text search on name, description, tags, capabilities' }
         - { name: tags, in: query, schema: { type: string, maxLength: 512 }, description: 'Comma-separated exact match (intersection) over tags and capabilities' }
-        - { name: chain, in: query, schema: { type: string, maxLength: 128 }, description: CAIP-2 chain ID }
         - { name: scheme, in: query, schema: { type: string, enum: [ed25519, secp256k1] } }
         - { name: online, in: query, schema: { type: boolean }, description: Only agents with active relay connections }
         - { name: account, in: query, schema: { type: string, maxLength: 170, pattern: '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$' }, description: 'CAIP-10 account; lists the delegates that claim it (exact match on profile.principal.account). A relay SHOULD omit expired principals. A claim list, not proof of delegation: clients MUST apply the signer-binding step (09 § Same-Account Rules step 4) before treating an entry as a delegate' }
@@ -267,13 +267,12 @@ paths:
           application/json:
             schema:
               type: object
-              description: '`maxPrice` and `currency` are both present or both absent (`invalid_argument`). The signed payload binds every field, with absent `tags` as `[]`.'
+              description: 'The signed payload binds every field, with absent `tags` as `[]` and absent `ext` as the empty string. Inside `ext`, `urn:ace:commerce:1` may carry `maxPrice` and `currency` (both or neither, `invalid_argument`).'
               required: [need, ttl]
               properties:
                 need: { type: string, minLength: 1, maxLength: 512 }
                 tags: { type: array, maxItems: 10, items: { type: string, minLength: 1, maxLength: 32, pattern: '^[a-z0-9][a-z0-9-]*$' }, description: May be empty }
-                maxPrice: { type: string, minLength: 1, maxLength: 64 }
-                currency: { type: string, minLength: 1, maxLength: 16 }
+                ext: { type: object, maxProperties: 8, additionalProperties: { type: object }, description: 'Same rules as the profile ext' }
                 ttl: { type: integer, minimum: 60, maximum: 86400, description: 'Seconds (a wire integer). The bounds are the reference relay defaults (INTENT_MIN_TTL, INTENT_MAX_TTL); a relay MAY configure others' }
       responses:
         "201": { description: Published, content: { application/json: { schema: { type: object, required: [intentId, expiresAt], properties: { intentId: { type: string }, expiresAt: { type: integer, minimum: 0, maximum: 9007199254740991, description: Unix seconds } } } } } }

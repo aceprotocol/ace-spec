@@ -15,12 +15,12 @@ The companion [`openapi.yaml`](./openapi.yaml) describes this API in OpenAPI 3.1
 | `POST /v1/register` | In body | RegistrationRequest ([02-discovery.md](./02-discovery.md) § Registration authorization) | `{"ok":true,"status":"registered"\|"idempotent"\|"refreshed"\|"rotated"}` |
 | `POST /v1/unregister` | Headers, action `unregister` | No body | `{"ok":true}` |
 | `GET /v1/peer?aceId=` | None | | PeerRecord ([02-discovery.md](./02-discovery.md) § Peer Record). A relay SHOULD omit a `principal` whose `expiresAt <= now` |
-| `GET /v1/discover?q&tags&chain&scheme&online&account&limit&cursor` | None | Parameters: [02-discovery.md](./02-discovery.md) § Search Parameters | `{"agents":[PeerRecord],"cursor":string\|null}`. A relay SHOULD omit a `principal` whose `expiresAt <= now` |
+| `GET /v1/discover?q&tags&scheme&online&account&limit&cursor` | None | Parameters: [02-discovery.md](./02-discovery.md) § Search Parameters | `{"agents":[PeerRecord],"cursor":string\|null}`. A relay SHOULD omit a `principal` whose `expiresAt <= now` |
 | `POST /v1/send` | Message signature | `{"message":Envelope}` | `{"ok":true}` |
 | `GET /v1/inbox?since&limit` | Headers, action `inbox` | See § Inbox | `{"messages":[{"streamId","message":Envelope}],"cursor":string\|null}` |
 | `GET /v1/listen?since` | Headers, action `listen` | See § Listen | `text/event-stream` |
-| `POST /v1/intents` | Headers, action `intent` | `{"need","tags"?,"maxPrice"?,"currency"?,"ttl"}` | 201 `{"intentId","expiresAt"}` |
-| `GET /v1/intents?q&tags&limit&cursor` | None | | `{"intents":[{"intentId","from","need","tags","maxPrice"?,"currency"?,"ttl","createdAt","expiresAt"}],"cursor":string\|null}` |
+| `POST /v1/intents` | Headers, action `intent` | `{"need","tags"?,"ttl","ext"?}` | 201 `{"intentId","expiresAt"}` |
+| `GET /v1/intents?q&tags&limit&cursor` | None | | `{"intents":[{"intentId","from","need","tags","ttl","ext"?,"createdAt","expiresAt"}],"cursor":string\|null}` |
 | `PUT /v1/webhook` | Headers, action `webhook` | `{"url":string,"secret":string}` (see § Webhooks) | `{"ok":true}` |
 | `GET /v1/webhook` | Headers, action `webhook` | No body | `{"webhook":null\|{"url","status":"active"\|"disabled","failures","updatedAt","lastDeliveredAt"?,"lastError"?}}` |
 | `DELETE /v1/webhook` | Headers, action `webhook` | No body | `{"ok":true}` |
@@ -56,7 +56,7 @@ The relay verifies a RegistrationRequest as specified in [02-discovery.md](./02-
 | `refreshed` | Newer timestamp, same encryption key |
 | `rotated` | Newer timestamp, different encryption key |
 
-An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. A relay rejects an expired principal at registration (`invalid_principal`; the expired-only exception in [09-principal.md](./09-principal.md) § Validation applies only to fetched records). The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (for `pricing`, only `currency` and `maxAmount`). A `profile.principal` that is `null` is treated as absent and not stored. The relay stores only the members of `principal` defined in [09-principal.md](./09-principal.md) § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape.
+An older timestamp, or an equal timestamp with a different mutation, is rejected with 409 `identity_conflict`. A relay rejects an expired principal at registration (`invalid_principal`; the expired-only exception in [09-principal.md](./09-principal.md) § Validation applies only to fetched records). The relay stores only the profile fields defined in [02-discovery.md](./02-discovery.md) § Profile Fields (`ext` in the canonical form the authorization signed). A `profile.principal` that is `null` is treated as absent and not stored. The relay stores only the members of `principal` defined in [09-principal.md](./09-principal.md) § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape.
 
 `POST /v1/unregister` removes the identity and profile and closes the caller's listen streams. Its auth timestamp MUST be strictly greater than the stored registration timestamp, else 409 `identity_conflict`. The relay retains it as a timestamp barrier so an older registration request cannot resurrect the identity.
 
@@ -64,7 +64,7 @@ An older timestamp, or an equal timestamp with a different mutation, is rejected
 
 `POST /v1/send` takes `{"message": Envelope}`. The relay:
 
-1. Decodes the envelope ([04-messages.md](./04-messages.md) § Envelope Decoding; any of the 13 types) (`invalid_envelope`). The relay never reads bodies.
+1. Decodes the envelope ([04-messages.md](./04-messages.md) § Envelope Decoding; packet 2.0 has no public application type) (`invalid_envelope`). The relay never reads bodies.
 2. Requires `from` to be registered (`not_registered`) and `to` to be registered (`unknown_peer`).
 3. Verifies the signature against the stored identity of `from`, whose scheme MUST equal `signature.scheme` (`invalid_signature`).
 4. If an envelope with the same `(from, messageId)` is already stored: returns `{"ok":true}` if it is the same envelope (same fingerprint), even when it is now stale; otherwise 409 `message_id_conflict`.
@@ -101,7 +101,7 @@ data: <envelope JSON>
 
 ## Intents
 
-`POST /v1/intents` publishes an intent ([02-discovery.md](./02-discovery.md) § Intent Broadcasting). The body is `{need, tags?, maxPrice?, currency?, ttl}`; `ttl` is a wire integer. The signed payload binds every stored field. A relay MAY bound the number of open intents per agent (`max_open_intents`). `GET /v1/intents` lists unexpired intents without authentication; `from` is the publisher's ACE ID, and `createdAt` and `expiresAt` are Unix seconds.
+`POST /v1/intents` publishes an intent ([02-discovery.md](./02-discovery.md) § Intent Broadcasting). The body is `{need, tags?, ttl, ext?}`; `ttl` is a wire integer and `ext` follows [02-discovery.md](./02-discovery.md) § Profile Fields. The signed payload binds every stored field. A relay MAY bound the number of open intents per agent (`max_open_intents`). `GET /v1/intents` lists unexpired intents without authentication; `from` is the publisher's ACE ID, and `createdAt` and `expiresAt` are Unix seconds.
 
 ## Webhooks
 
@@ -154,15 +154,16 @@ Endpoint paths are free. `/ace/receive` is a convention of the reference CLI, no
 
 ### Receiver
 
-The receiver processes the `message` member as a direct-sourced message ([06-security.md](./06-security.md) § Durable Delivery): unauthenticated until verified, `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`, rejections not persisted. Unknown request members are ignored. It answers with the first matching row:
+The receiver hands the `message` member to its secure mailbox ([13-session-core.md](./13-session-core.md)): the member is a secure-delivery frame (hello or data), never a static application packet — a static packet is rejected with `secure_delivery_required`. The frame is unauthenticated until the handshake verifies it; the inner application envelope then enters the pipeline of [06-security.md](./06-security.md) § Durable Delivery. The receiver's own frames (offer, receipt) always go through the relay. Unknown request members are ignored. It answers with the first matching row:
 
 | Condition | Response |
 |-----------|----------|
 | Receiver not accepting (closed or shutting down); not a fault of the request, so the sender falls back to the relay | 503 `{"ok":false,"error":"internal_error"}` |
 | Body larger than `MAX_DIRECT_BODY_BYTES` | 413 `{"ok":false,"error":"payload_too_large"}` |
 | Body is not UTF-8 JSON whose top level is an object with a `message` member | 400 `{"ok":false,"error":"invalid_argument"}` |
-| Delivered, or a duplicate of an accepted message | 200 `{"ok":true,"messageId":string}` |
-| Rejected by the pipeline (including a `message` that is not a valid envelope) | 400 `{"ok":false,"error":<pipeline code>}` |
+| Frame accepted: a handshake frame that needs no application outcome, or a data frame whose application message was delivered or is a duplicate | 200 `{"ok":true,"messageId":string}` (the frame's `messageId`) |
+| Data frame accepted but the inner application envelope was permanently rejected by the pipeline | 200 `{"ok":true,"messageId":string}`; the rejection travels in the receipt frame ([13-session-core.md](./13-session-core.md)) |
+| Frame rejected: not a valid envelope, unadmitted sender, static application packet, expired attempt | 400 `{"ok":false,"error":<code>}` |
 | Retryable failure (`transient` or `local` category) | 503 `{"ok":false,"error":<code>}` |
 | Any other `permanent` SDK error | 400 `{"ok":false,"error":<code>}` |
 | Any other failure | 503 `{"ok":false,"error":"internal_error"}` |
@@ -176,7 +177,7 @@ A `message` member that is present is processed whatever its JSON type (`null` i
 - Delivery succeeds iff the response is 2xx and its body is a JSON object with `"ok": true`.
 - 400 or 413 is `direct_rejected`, carrying the receiver's `error` string only when it matches `^[a-z0-9_]{1,64}$` (otherwise none; it is peer-controlled text). The recipient has rejected this envelope: the sender MUST NOT retry it directly and MUST NOT fall back to the relay for it.
 - Anything else (network failure, timeout, 429, 503, any other status or body) is `direct_unavailable`. The sender falls back to the relay.
-- A sender with a verified peer that has an endpoint SHOULD try it first, and falls back to the relay on `direct_unavailable` or an unsafe endpoint. Both paths carry the same envelope (same `messageId`); the receiver's replay state makes a second copy a duplicate.
+- A sender with a verified peer that has an endpoint SHOULD try it first, and falls back to the relay on `direct_unavailable` or an unsafe endpoint. Both paths carry the same secure-delivery frame (same `messageId`); the receiver's replay state makes a second copy a duplicate.
 
 ## Errors
 
@@ -232,7 +233,7 @@ A client normalizes the relay base URL before use:
 3. The host is either a non-empty run of ASCII letters, digits, `.` and `-`, written lowercase, or a bracketed IPv6 literal (`[` IPv6 address `]`, hex digits written lowercase); anything else (non-ASCII, percent-encoded, `_`, a second `:`) is invalid. A port, if present, is 1–5 decimal digits without a leading zero, in 1..65535; `:443` for `https` and `:80` for `http` are removed.
 4. The path is kept as given, except that all trailing `/` are removed.
 
-A URL that fails 1–3 is `invalid_argument`. The normalized string is the key of the client's durable inbox cursor ([06-security.md](./06-security.md) § Appendix A, `cursors.json`), so equivalent spellings share one cursor (`test-vectors.json` → `relayUrls`).
+A URL that fails 1–3 is `invalid_argument`. Its SHA-256 names the client's durable mailbox cursor ([06-security.md](./06-security.md) § Appendix A, `secure/cursors/`), so equivalent spellings share one cursor (`test-vectors.json` → `relayUrls`).
 
 ### Responses
 

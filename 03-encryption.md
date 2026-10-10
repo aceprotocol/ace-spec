@@ -10,7 +10,7 @@ X-Wing (X25519 + ML-KEM-768)  →  HKDF-SHA256  →  AES-256-GCM
 
 X-Wing is the hybrid KEM specified in `draft-connolly-cfrg-xwing-kem` (ML-KEM-768 per FIPS 203 combined with X25519 per RFC 7748). An attacker must break **both** X25519 and ML-KEM-768 to recover a message key. This protects recorded traffic against future quantum computers ("harvest now, decrypt later"), which is the one attack on an encryption scheme that cannot be fixed later by rotating keys.
 
-The same construction is used by Apple's CryptoKit post-quantum HPKE, XMTP, and the IETF MLS and TLS post-quantum cipher suites. ACE defines exactly one suite. There is no algorithm negotiation.
+ACE defines exactly one suite. Using a hybrid KEM does not make this protocol equivalent to an MLS or Signal session protocol.
 
 ## Encryption Flow
 
@@ -101,14 +101,14 @@ Implementations MUST precompute `ACE_KEM_SALT`. The salt input string is part of
 
 ## Security Properties
 
-### What a compromised key reveals
+### What a compromised key reveals in a raw X-Wing packet
 
 | Compromised | Messages exposed |
 |-------------|------------------|
-| Sender's state (after sending) | None. Encapsulation randomness and the shared secret are destroyed after use; nothing on the sender side can re-derive a past message key. |
+| Sender's erased encapsulation randomness | The KEM cannot reconstruct past sent message keys from erased randomness. Plaintext retained by the application, logs or backups remains exposed to endpoint compromise. |
 | Recipient's X-Wing private key | **All** messages ever sent to that key, past and future, until the key is rotated. |
 
-ACE does not include a ratchet or per-session key exchange. The second row is the reason a recipient key MUST be stored in hardware or derived from a hardware root where available, and why it SHOULD be rotated via the registration file when compromise is suspected (see [04-messages.md](./04-messages.md) § Key rotation).
+Raw X-Wing packets alone have neither forward secrecy against recipient-key compromise nor post-compromise security. The integrated [secure delivery profile](./13-session-core.md) uses them to carry authenticated control frames, with the original application envelope inside a fresh MLS group. Later static-key compromise exposes the outer frames but does not alone decrypt captured past application deliveries after ephemeral state erasure, under classical MLS assumptions. Original application envelopes retained in private Outbox storage, plaintext logs and backups are outside that guarantee. Store static seeds in hardware or derive them from a hardware root where available; rotate compromised bindings as specified in [04-messages.md](./04-messages.md).
 
 ### Post-quantum
 
@@ -151,3 +151,5 @@ Both fields are canonical Base64. Receivers MUST reject the message unless `kemC
 - The `conversationId` used as AAD binds the ciphertext to the specific conversation, preventing message transplant attacks
 - **Nonce safety:** Every message encapsulates a fresh shared secret, so every message derives a cryptographically independent AES key. Random 12-byte nonces therefore do not accumulate collision risk across messages; the 2^32 birthday bound for a single key does not apply.
 - **Libraries:** Swift — CryptoKit `XWingMLKEM768X25519` (macOS 26 / iOS 26) or swift-crypto; TypeScript — `@noble/post-quantum` `hybrid.ml_kem768_x25519`; Python — `cryptography` ≥ 48 (`MLKEM768PrivateKey.from_seed_bytes`, `X25519PrivateKey`) with the combiner above.
+
+Public storage of ciphertext magnifies this limitation: a later recipient-key compromise exposes the archived history. Public transport metadata also reveals communicating identities, stable conversation links, timing and ciphertext size. Packet 2.0 encrypts application type and business thread IDs. Do not describe the current relay as a private public ledger or as a verifiable append-only log. This KEM construction provides no forward secrecy by itself; application delivery therefore runs over a fresh MLS (RFC 9420) group per attempt, specified in [13-session-core.md](./13-session-core.md).

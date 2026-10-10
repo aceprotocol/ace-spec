@@ -1,5 +1,6 @@
 # 09 — Principal (Extension, Draft)
 
+This is an optional account-affiliation and coordination profile. Its roles do not authorize resource execution. Generic private communication needs no account. Use [exact-intent resource grants](./10-resource-grants.md) and authoritative reservation for effects.
 ## Overview
 
 A **principal** is the account a person or organisation controls. One principal may operate several ACE identities (a phone, a laptop CLI, a hosted agent). This chapter lets a third party verify that an ACE identity is a delegate of a given account, and defines the three message types a principal's identities exchange among themselves.
@@ -21,7 +22,7 @@ A principal record appears as the `principal` member of a registration file ([01
 ```json
 {
   "account": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
-  "roles": ["controller", "agent"],
+  "roles": ["controller", "delegate"],
   "signer": { "scheme": "ed25519", "publicKey": "Base64(32 bytes)" },
   "issuedAt": 1759900000,
   "expiresAt": 1791436800,
@@ -33,12 +34,12 @@ A principal record appears as the `principal` member of a registration file ([01
 | Field | Required | Rule |
 |-------|----------|------|
 | `account` | Yes | CAIP-10: `^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$` |
-| `roles` | Yes | Array of strings, non-empty, each `controller` or `agent`, no duplicates, `controller` before `agent` when both are present. Exactly one of `["controller"]`, `["agent"]`, `["controller","agent"]`. Any other array is invalid |
+| `roles` | Yes | Array of strings, non-empty, each `controller` or `delegate`, no duplicates, `controller` before `delegate` when both are present. Exactly one of `["controller"]`, `["delegate"]`, `["controller","delegate"]`. Any other array is invalid |
 | `signer.scheme` | Yes | `ed25519` or `secp256k1` |
 | `signer.publicKey` | Yes | Canonical Base64 of a valid key for `signer.scheme`: 32 bytes (`ed25519`), a 33-byte compressed point (`secp256k1`) |
 | `issuedAt` | Yes | Wire integer; `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS` |
 | `expiresAt` | Yes | Wire integer; MUST be > `issuedAt` and `expiresAt - issuedAt` MUST be <= 31622400 (366 days); at verification MUST be > now |
-| `scope` | No | 1..256 code points, no U+0000–U+001F or U+007F. Its meaning is agreed between implementations; the protocol does not interpret it |
+| `scope` | No | 1..256 code points, no U+0000–U+001F or U+007F. An opaque constraint; the built-in authorization rules MUST reject a non-absent scope with `wrong_principal` because no constraint interpreter is defined. It MUST NOT silently become unrestricted authority |
 | `signature` | Yes | The signature of `signer` in the encoding of `signer.scheme` ([04-messages.md](./04-messages.md) § Signature Encoding by Scheme) |
 
 The values `Base64(32 bytes)` and `Base64(64 bytes)` in the example are illustrative placeholders, not valid encodings.
@@ -58,7 +59,7 @@ signData = buildSignData("principal", subjectAceId, issuedAt,
 - The **subject** is the ACE identity the record authorizes. `subjectAceId` is `ace:sha256:hex(SHA-256(subjectSigningPublicKey))`.
 - `subjectSigningPublicKeyB64` is the canonical Base64 of the subject's raw signing public key bytes (32 bytes for ed25519, the 33-byte compressed point for secp256k1, [01-identity.md](./01-identity.md) § Validation rule 3), computed by the verifier from the key it has verified (the relay request's `signingPublicKey`, the peer record's signing key, or the key determined by [01-identity.md](./01-identity.md) § Validation rule 3). It is never copied from the record.
 - `signer.publicKey` is used exactly as it appears in the record.
-- `join(roles, ",")` is the roles array joined with `,` (for example `controller,agent`).
+- `join(roles, ",")` is the roles array joined with `,` (for example `controller,delegate`).
 - `scopeOrEmpty` is `scope`, or the empty string when absent. `decimal(expiresAtOr0)` is `decimal(expiresAt)` (0 never occurs for a valid record; the encoding is kept for payload stability).
 - The digest is signed by the `signer` key. This is the only signing context whose signer is not the holder of `aceId`.
 - Signers MAY produce hedged (non-deterministic) signatures. Conformance compares every member of a produced record except `signature` byte-for-byte, and verifies `signature`.
@@ -139,10 +140,10 @@ SDKs keep one record per sent `request` ([06-security.md](./06-security.md) § A
 `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` = `{"conversationId","decision":null|{"messageId","outcome","timestamp"},"expiresAt":null|int,"messageId","sentAt","to","version":1}`
 
 - `expiresAt` is the request envelope `timestamp` + `ttl`, null when `ttl` is absent.
-- `sentAt` is the sender's local clock (Unix seconds, wire integer) when it writes the record after delivery; it is not the envelope `timestamp`.
+- `sentAt` is the sender's local clock (Unix seconds, wire integer) when it writes the record before transport; it is not the envelope `timestamp`.
 - `to` is the ACE ID the request was sent to; it is consulted when a `decision` arrives (§ Same-Account Rules step 7).
-- The sender writes it after the `request` is delivered and before it clears the pending send.
-- The receiver of the `decision` fills `decision` when it accepts the decision, after the delivery record and before the replay state (and repairs it from delivery records on recovery).
+- The sender writes it before invoking transport. Write failure prevents sending; transport failure retains the record because the request may already have reached its recipient.
+- The receiver of the `decision` fills `decision` when it accepts the decision, right after the delivery record (and repairs it from delivery records on recovery).
 - A record MAY be deleted 30 days after `sentAt`.
 
 ## Errors
@@ -159,19 +160,9 @@ A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md
 - **Delegate impersonating its principal.** The record is signed by the account's key over the subject's signing key; a delegate cannot mint one for another subject, and a record cannot be transplanted (§ Validation step 9).
 - **Relay tampering and rollback.** A relay cannot forge or alter a principal: the record is signed by `signer` over the subject's key. A relay CAN replay any unexpired record the subject previously registered. Because the profile is not covered by the registration binding signature, it can serve a profile stripped of its principal (principal messages from that peer then fail closed with `wrong_principal`) and later re-serve an older unexpired principal: the `registeredAt` barrier of [02-discovery.md](./02-discovery.md) § Rollback Barrier blocks only an older record, and Principal monotonicity (`issuedAt`) compares only against a principal still cached, which a strip has removed.
 - **Downgrade via registration file.** A registration file cannot remove or downgrade a cached principal: see [02-discovery.md](./02-discovery.md) § Rollback Barrier.
-- **Withdrawal and revocation.** A record binds only the subject's signing key; it carries no registration timestamp. So (a) a compromised subject holding the key can re-register an unexpired record, and (b) a relay, which does not cover the profile with the binding signature, can re-attach a withdrawn but unexpired record. Re-registering without the principal therefore withdraws it only against honest relays; for a compromised subject, `expiresAt` is the only protocol-level revocation, which is why it is required and bounded. Re-issuing a principal with fewer roles or a narrower scope does not revoke the earlier record before its `expiresAt`. The protocol has no immediate revocation: before `expiresAt`, a receiver stops honouring the earlier record only if its host removes the signer from its trusted-signer set or `selfSigner`, or applies the on-chain check below; controllers that need fast revocation keep `expiresAt` short. Verifiers MAY additionally check on-chain that `signer.publicKey` is still an authority of `account` and treat loss of authority as revocation.
+- **Withdrawal and revocation.** A record binds only the subject's signing key; it carries no registration timestamp. So (a) a compromised subject holding the key can re-register an unexpired record, and (b) a relay, which does not cover the profile with the binding signature, can re-attach a withdrawn but unexpired record. Re-registering without the principal therefore withdraws it only against honest relays; for a compromised subject, `expiresAt` is the only protocol-level revocation, which is why it is required and bounded. A receiver that has adopted a newer principal rejects older records under its persistent principal horizon, including after profile omission, expiry or key rotation. Re-issuing a principal still cannot revoke the earlier record at receivers that have never observed the update. The protocol has no immediate revocation: before `expiresAt`, a receiver stops honouring the earlier record only if its host removes the signer from its trusted-signer set or `selfSigner`, or applies the on-chain check below; controllers that need fast revocation keep `expiresAt` short. Verifiers MAY additionally check on-chain that `signer.publicKey` is still an authority of `account` and treat loss of authority as revocation.
 - **Account strings are not self-certifying.** A principal record can name any `account`; without the signer-binding step above, any key could mint a record claiming to belong to a victim's account and pass the same-account rule. The binding step is therefore mandatory and the trusted-signer set MUST only contain keys the host has verified to control the account.
+- **Unsupported actions.** A controller MUST reject approval when it cannot completely interpret the action and all execution-relevant constraints. User presence alone is not authorization for an unknown action. Receiving a valid message does not authorize a side effect.
 - **Approval spoofing.** `summary`, `amount` and `currency` of a `request` are delegate-asserted display fields. A controller MUST present, and approve against, what it will actually execute (`details`); it MUST NOT treat `summary`/`amount` as authoritative when they disagree with `details`.
 - **Key custody.** `hardwareBacking` is self-asserted and not verifiable ([01-identity.md](./01-identity.md)); the principal binding is the verifiable delegation fact. Custody (`hardwareBacking`) remains self-asserted.
 - **Authority.** The protocol proves that `signer` signed; whether `signer` controls `account` is established by the mandatory signer-binding step (§ Same-Account Rules step 4). Reading the chain is a MAY, as a means of populating the trusted-signer set.
-
-## v5 backlog
-
-Not normative; recorded for the next revision.
-
-- Length and charset bounds for `action`, `summary`, `amount`, `currency` and `requestId`.
-- A `requestLedger` section in `test-vectors.json`.
-- Prose for the `rules` vector section (hedged signatures: compare members, verify `signature`).
-- Rollback Barrier principal vectors: registration file never removes a principal, expired cached principal dropped on keep-cache branches, monotonic `issuedAt`/`registeredAt` replacement, rotation adoption, expired-only principal treated as absent.
-- Interop coverage for the trusted-signer path (rule 4(b)), the one-time refresh before `wrong_principal`, `eip155` derivation (rule 4(c)), a `decision` whose sender is not the request's `to`, and request expiry.
-- Case-insensitive rule 5 for `eip155` accounts, and normalisation of the relay's per-account index.

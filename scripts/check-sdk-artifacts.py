@@ -20,7 +20,11 @@ for sdk, fixture, example, slug, language in [
     assert (sdk / fixture / 'test-vectors.json').read_bytes() == canonical, f'{sdk}: stale vectors'
     metadata = json.loads((sdk / fixture / 'source.json').read_text())
     assert metadata['sha256'] == hashlib.sha256(canonical).hexdigest(), f'{sdk}: bad vector digest'
-    source = (sdk / example).read_text().strip().replace("'../src/index.js'", "'@ace-protocol/sdk'")
+    source = (sdk / example).read_text().strip()
+    if language == 'typescript':
+        import re
+        source = re.sub(r"'\.\./src/index\.js'", "'@ace-protocol/sdk'", source)
+        source = re.sub(r"'\.\./src/([a-z-]+)\.js'", r"'@ace-protocol/sdk/\1'", source)
     page = (args.docs / 'content/docs' / f'sdk-{slug}.mdx').read_text().split('## Quick Start', 1)[1]
     code = page.split(f'```{language}\n', 1)[1].split('```', 1)[0].strip()
     assert source == code, f'{slug}: documentation has diverged from its tested example'

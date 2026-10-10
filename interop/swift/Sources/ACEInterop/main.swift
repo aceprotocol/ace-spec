@@ -51,12 +51,12 @@ let AUTH: [(String, RelayAuthRequest)] = [
     ("listen", .listen(since: "-")),
     ("inbox", .inbox(since: "1700000000000-0", limit: 50)),
     ("unregister", .unregister),
-    ("intent", .intent(need: "Translate EN→FR", tags: ["nlp", "fr"], maxPrice: "10", currency: "USDC", ttl: 3600)),
+    ("intent", .intent(need: "Translate EN→FR", tags: ["nlp", "fr"], ext: [commerceExt: ["maxPrice": "10", "currency": "USDC"]], ttl: 3600)),
 ]
 func profile(_ lang: String) -> AgentProfile {
     AgentProfile(name: "Agent \(lang) é", description: "interop / matrix", tags: ["interop", "ace"],
                  capabilities: ["translate"], endpoint: "https://\(lang).example/ace",
-                 pricing: ProfilePricing(currency: "USDC", maxAmount: "10"))
+                 ext: [commerceExt: ["pricing": ["currency": "USDC", "maxAmount": "10"]]])
 }
 func textBody(_ s: String, _ r: String, _ sch: String) -> [String: JSONValue] {
     ["message": "hello \(s)→\(r) (\(sch)) héllo 世界 / \"q\" \\ ✓"]
@@ -66,7 +66,7 @@ let OFFER = obj(#"{"price":"9.75","currency":"USDC","terms":"delivery in 24h / n
 
 // Principal fixtures (same values in every language; 09-principal). One shared CAIP-10 account; the controller
 // signer (owner key) of scheme s is a v4 test-vectors agent (ed25519: alice, secp256k1: bob). `<lang>-<s>` is a
-// delegate (["agent"]), `<lang>-<s>-rx` a controller (["controller"]).
+// delegate (["delegate"]), `<lang>-<s>-rx` a controller (["controller"]).
 nonisolated(unsafe) let VECTORS: [String: Any] = {
     let path = ProcessInfo.processInfo.environment["ACE_VECTORS"]
         ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -120,7 +120,7 @@ func principalPeer(_ lang: String, _ s: SigningScheme, rx: Bool = false) throws 
 func envelope(_ v: Any) throws -> ACEMessage { try decodeEnvelope(data(v)) }
 func summary(_ p: ParsedMessage) throws -> [String: Any] {
     ["messageId": p.messageId, "from": p.from, "to": p.to, "conversationId": p.conversationId,
-     "type": p.type.rawValue, "threadId": p.threadId as Any? ?? NSNull(), "timestamp": p.timestamp,
+     "type": p.type.rawValue, "schemaDigest": p.schemaDigest, "threadId": p.threadId as Any? ?? NSNull(), "timestamp": p.timestamp,
      "body": try parseJSON(JSONValue.object(p.body).jsonData())]
 }
 func peerSummary(_ p: VerifiedPeer) -> [String: Any] {
@@ -151,7 +151,7 @@ func gen() throws {
         let req = try createRegistrationRequest(identity: id, profile: .replace(profile(LANG)), timestamp: ts)
         let principal = try createPrincipalRecord(
             signer: PrincipalSigner(identity: owner(s)), subjectSigningPublicKey: id.getSigningPublicKey(), account: ACCOUNT,
-            roles: suffix == "-rx" ? ["controller"] : ["agent"], expiresAt: ts + 3600, scope: SCOPE, issuedAt: ts)
+            roles: suffix == "-rx" ? ["controller"] : ["delegate"], expiresAt: ts + 3600, issuedAt: ts)
         let regP = try createRegistrationFile(for: id, name: "Agent \(LANG) \(s.rawValue)\(suffix)",
                                               endpoint: "https://\(LANG).example/ace", principal: principal)
         var prof = profile(LANG)
@@ -169,7 +169,7 @@ func gen() throws {
     for s in SCHEMES {
         let subject = try ACEBase64.decode(FIXED_SUBJECT)
         let rec = try createPrincipalRecord(signer: PrincipalSigner(identity: owner(s)), subjectSigningPublicKey: subject,
-                                            account: ACCOUNT, roles: ["agent"], expiresAt: FIXED_ISSUED_AT + 3600, scope: SCOPE,
+                                            account: ACCOUNT, roles: ["delegate"], expiresAt: FIXED_ISSUED_AT + 3600, scope: SCOPE,
                                             issuedAt: FIXED_ISSUED_AT)
         try wr("fixed/\(LANG)-\(s.rawValue).json", [
             "record": try parseJSON(rec.jsonData()), "payloadHex": hex(principalPayload(rec, subjectSigningPublicKey: subject)),
@@ -188,7 +188,7 @@ func verify() throws {
             r["import"] = attempt {
                 let e = try JSONDecoder().decode(SoftwareIdentityExport.self, from: data(d["export"]!))
                 let idn = try SoftwareIdentity(export: e)
-                let reg = try createRegistrationFile(for: idn, name: rf["name"] as! String, endpoint: rf["endpoint"] as! String)
+                let reg = try createRegistrationFile(for: idn, name: rf["name"] as! String, endpoint: rf["endpoint"] as! String, timestamp: rf["registeredAt"] as! Int)
                 return ["aceId": idn.getACEId(), "address": idn.getAddress(), "scheme": idn.getSigningScheme().rawValue,
                         "signingPublicKey": b64(idn.getSigningPublicKey()), "encryptionPublicKey": b64(idn.getEncryptionPublicKey()),
                         "reexport": try encodable(idn.exportPrivateKey()), "registrationFile": try encodable(reg)]
@@ -237,9 +237,10 @@ func send1() throws {
                 let threadId = "deal/\(key)/✓"
                 let tb = textBody(LANG, R, s.rawValue)
                 let text = try createMessage(sender: me, recipient: peer, type: .text, body: tb, threads: threads)
+                let custom = try createMessage(sender: me, recipient: peer, type: MessageType(rawValue: "urn:example:task:1")!, body: ["task": "你好"], threadId: "private", schemaDigest: String(repeating: "ab", count: 32))
                 let rfq = try createMessage(sender: me, recipient: peer, type: .rfq, body: RFQ, threads: threads, threadId: threadId)
                 try wr("msgs/m1/\(key).json", ["threadId": threadId, "textBody": try anyJSON(tb), "rfqBody": try anyJSON(RFQ),
-                                               "text": try parseJSON(text.jsonData()), "rfq": try parseJSON(rfq.jsonData())])
+                                               "text": try parseJSON(text.jsonData()), "rfq": try parseJSON(rfq.jsonData()), "custom": try parseJSON(custom.jsonData())])
                 try wr("priv/\(LANG)/threads-\(R)-\(s.rawValue).json", try encodable(threads.exportState()))
             } catch {
                 try wr("msgs/m1/\(key).json", ["error": fail(error)])
@@ -267,6 +268,7 @@ func recv1() throws {
                 func parse(_ env: Any) throws -> [String: Any] {
                     try summary(parseMessage(envelope(env), receiver: me, sender: peer, threads: threads, replay: replay))
                 }
+                r["custom"] = attempt { try parse(m["custom"]!) }
                 r["text"] = attempt { try parse(m["text"]!) }
                 r["rfq"] = attempt { try parse(m["rfq"]!) }
                 r["replayAgain"] = attempt { try parse(m["text"]!) }
@@ -341,15 +343,15 @@ func persist() async throws {
             let peers = try PeerStore(store: store)
             for S in LANGS { _ = try await peers.pinRegistrationFile(regFile(idFile(S, s))) }
             let handed = Counter()
-            let inbox = try await Inbox.open(identity: me, store: store, peers: peers) { _ in handed.inc() }
+            let inbox = try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { _ in handed.inc() }, commerce: true)
             for S in LANGS {
                 let m = try rd("msgs/m1/\(S)-\(LANG)-\(s.rawValue).json")
                 if let e = m["error"] { throw NSError(domain: "sender \(S) failed: \(e)", code: 1) }
                 let text = try data(m["text"]!), rfq = try data(m["rfq"]!)
                 receives[S] = [
-                    "text": outcome(try await inbox.receive(text, source: .direct)),
-                    "rfq": outcome(try await inbox.receive(rfq, source: .direct)),
-                    "textAgain": outcome(try await inbox.receive(text, source: .direct)),
+                    "text": outcome(try await inbox.receive(text)),
+                    "rfq": outcome(try await inbox.receive(rfq)),
+                    "textAgain": outcome(try await inbox.receive(text)),
                 ]
             }
             await inbox.close()
@@ -415,9 +417,9 @@ func load() async throws {
                 }
                 r["inboxReopen"] = await attemptAsync {
                     let handed = Counter()
-                    let inbox = try await Inbox.open(identity: me, store: store, peers: peers) { _ in handed.inc() }
+                    let inbox = try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { _ in handed.inc() }, commerce: true)
                     let m = try rd("msgs/m1/\(LANGS[0])-\(R)-\(s.rawValue).json")
-                    let dup = outcome(try await inbox.receive(try data(m["rfq"]!), source: .direct))
+                    let dup = outcome(try await inbox.receive(try data(m["rfq"]!)))
                     await inbox.close()
                     return ["handedOnOpen": handed.value, "duplicate": dup]
                 }
@@ -551,7 +553,7 @@ func precv() async throws {
                 if let e = m["error"] { throw NSError(domain: "sender failed: \(e)", code: 1) }
                 let peer = try principalPeer(S, s)
                 for k in ["request", "report"] {
-                    r[k] = outcome(try await inbox.receive(try data(m[k]!), source: .direct))
+                    r[k] = outcome(try await inbox.receive(try data(m[k]!)))
                     r["\(k)Parsed"] = handed.get(message(m, k)["messageId"] as! String)
                 }
                 r["noContext"] = attempt { try parseFresh(m["report"]!, me, peer) }
@@ -601,7 +603,7 @@ func pdecide() async throws {
                 let m = try rd("msgs/p2/\(key).json")
                 let req = message(try rd("msgs/p1/\(LANG)-\(R)-\(s.rawValue).json"), "request")
                 for (k, env) in [("decision", "decision"), ("decisionAgain", "decision"), ("decision2", "decision2"), ("report", "report")] {
-                    r[k] = outcome(try await inbox.receive(try data(m[env]!), source: .direct))
+                    r[k] = outcome(try await inbox.receive(try data(m[env]!)))
                 }
                 r["decisionParsed"] = handed.get(message(m, "decision")["messageId"] as! String)
                 r["reportParsed"] = handed.get(message(m, "report")["messageId"] as! String)

@@ -1,5 +1,7 @@
 # 06 — Security
 
+Message packet 2.0 encrypts `{type,schemaDigest,threadId?,body}`. Decode and authenticate before reading application fields or selecting an optional business policy. Ordinary delivery is not execution authorization. Persist `schemaDigest` with every parsed delivery and `{type,schemaDigest,threadId?}` with every pending send; these fields are local metadata, never public envelope fields.
+
 ## Security Model
 
 ACE follows two core security principles:
@@ -33,7 +35,7 @@ Receivers MUST process ALL messages (economic, system, social and principal) thr
    → Reject if (from, messageId) is in the seen store  (replay)
 
 4. Signature Verification (BEFORE decryption)
-   → Reconstruct signData (04-messages.md § Signing Contexts, action `message`)
+   → Reconstruct signData (04-messages.md § Signing Contexts, action `packet`)
    → Verify with the sender's registered key under the
      strict rules of signing-schemes/*.md              (invalid_signature)
    → Then atomically commit to the seen store (§ Seen Message Store, Commit). Nothing enters
@@ -47,19 +49,20 @@ Receivers MUST process ALL messages (economic, system, social and principal) thr
 
 6. Body Validation
    → Apply 04-messages.md § Body Rules                 (invalid_body)
+   → Run the validator the host installed for this `schemaDigest`, if any   (invalid_body, or the permanent code it raises)
    → Reject malformed bodies (defense in depth)
 
 7. State and Principal Validation
-   → Economic types: apply 04-messages.md § Check Order: party check, transition,
+   → If the commerce profile is installed, economic types: apply 04-messages.md § Check Order: party check, transition,
      role check, reference positions (§ References), bounds
                      (wrong_party | transition_not_allowed | wrong_role |
                       bad_reference | limit_exceeded)
    → Apply state transition atomically
    → rejected and confirmed are terminal — reject all economic messages
-   → Principal types: apply 09-principal.md § Same-Account Rules
+   → If an account policy is installed, apply 09-principal.md § Same-Account Rules
                      (wrong_principal | bad_reference)
-   → An accepted decision marks its request decided after the
-     delivery record and before the replay state (§ Durable Delivery)
+   → An accepted decision marks its request decided right after the
+     delivery record (§ Durable Delivery)
 
 Note: On the **sender side**, the state machine uses a two-phase pattern:
   (a) Pre-check: verify the transition would be valid (fail fast)
@@ -140,7 +143,7 @@ Timestamps prevent delayed replay of old messages:
 |-------|-------|
 | Future | `now + TIMESTAMP_WINDOW_SECONDS` (5 minutes) |
 | Past | The floor |
-| Direct (non-relay) delivery | `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS` in addition |
+| Direct (non-relay) delivery | `abs(now - timestamp) <= TIMESTAMP_WINDOW_SECONDS` in addition |
 
 Together with the store's horizons, the window is an **anti-replay** mechanism, not a business validity constraint. Business-level validity is handled by per-message fields:
 - `offer.ttl` — how long an offer remains valid
@@ -153,49 +156,67 @@ Implementations SHOULD use NTP-synchronized clocks.
 
 ### Receiver
 
-A receiver commits an accepted message in this order. Each step is durable before the next
-begins:
+A receiver commits an accepted message in this order. Steps 1, 1a, 2 and 5 are durable
+before the next begins:
 
 1. Write the delivery record (the parsed message and the resulting thread snapshot). This is
-   the commit point: a failure here leaves no trace and the message is retried.
+   the commit point: a failure here leaves no trace and the message is retried. The record
+   also journals the message's seen-store commit (step 3).
 1a. If the message is a `decision`, update the referenced `requests/` record (`decision` filled); if it is a `request`, nothing (requests are written by the sender).
 2. Write the thread state.
-3. Write the replay state (the tentative seen store that includes this message).
+3. Commit the message to the seen store. The replay state MAY be written lazily: the delivery
+   records written since its last write journal the commits it does not hold yet.
 4. Hand the message to the application.
 5. Mark the delivery as handed over.
-6. Advance the cursor.
+6. The secure mailbox releases the receipt and advances its relay cursor ([13-session-core.md](./13-session-core.md)); the Inbox itself keeps no cursor.
 
-Replay state is updated on a copy and swapped in only after step 3 succeeds. On restart,
-recovery repairs thread and replay state from delivery records and hands over every record
-not yet marked. The application MUST persist its effect idempotently, keyed by
-`(from, messageId)`, before returning.
+The seen store is changed only after step 1 succeeds. On restart, recovery repairs thread
+state and re-commits every delivery record to the seen store (by timestamp, then key) before
+any receive, then hands over every record not yet marked. Because the records are the journal:
+
+- A delivery record MUST NOT be deleted before a *written* replay state covers it (`H` or
+  `H[from]`); a horizon raised only in memory does not count.
+- A rejection after step 4 of the pipeline has no delivery record, so its seen-store commit
+  is written (together with any commits held lazily) before the rejection is reported.
+
+Rewriting the whole replay state per message costs O(capacity) and dominates receive time at
+the default capacity. The ACE SDKs write it every 1024 commits and when the Inbox closes, and
+prune covered records after each write. The application MUST persist its effect
+idempotently, keyed by `(from, messageId)`, before returning.
 
 Rejections:
 
-- A relay-sourced message that fails permanently (any pipeline error) is quarantined under
+- A message that fails permanently (any pipeline error) is quarantined under
   its envelope fingerprint ([04-messages.md](./04-messages.md) § Envelope Fingerprint), so a
   forged sender or message ID cannot poison an authentic delivery. If the failure came
   after step 4 of the pipeline, the seen-store commit is persisted too.
 - A replay is a duplicate: nothing is written.
-- A direct-sourced message is unauthenticated until verified; its rejections are not
-  persisted. Direct delivery additionally requires `|now - timestamp| <= TIMESTAMP_WINDOW_SECONDS`.
+- Every message reaches this pipeline through the secure receive boundary of
+  [13-session-core.md](./13-session-core.md), whichever transport (relay or direct endpoint)
+  carried the frames; the inner envelope is not subject to a separate freshness window — the
+  fresh handshake bounds it, and the replay floor and seen store apply as above.
 - A transient failure (relay unreachable, timeout) or local failure (storage, unavailable key hardware) is retryable: the tentative replay
   state is discarded, including horizons.
 
-The relay cursor advances past delivered, duplicate and quarantined entries, and stops
-before the first retryable one.
+The secure mailbox's relay cursor advances past delivered, duplicate and quarantined entries,
+and stops before the first retryable one.
 
 ### Sender
 
-Persist a pending signed envelope together with its resulting thread state before
-sending it. Uncertain network outcomes retry the same envelope and message ID;
-a retry MUST NOT advance the thread twice. Clear the pending envelope only after
-acknowledgement, or when a later inbound message on the thread proves delivery. A pending
-envelope that the relay rejects as expired (`envelope_expired`) MAY be re-signed with the
-same `messageId` and a fresh timestamp; the thread entry it produced is rebuilt with the new
-timestamp.
+Persist a pending signed envelope and its resulting thread state before sending it. Bind each caller-supplied `requestId` durably to the operation digest below of `{from,to,type,schemaDigest,threadId,body}`, where absent `threadId` is `null`. A retry with different parameters MUST fail with `pending_send_conflict`; identical parameters reuse the original signed envelope and message ID, including after acknowledgement, restart or local abandonment. Retain the completed/abandoned record in `sent/` before removing its pending record. Local abandonment only stops delivery attempts; it does not revoke a request already received elsewhere.
 
-A `request` whose transport succeeded is recorded in `requests/` ([09-principal.md](./09-principal.md) § Persistence) before the pending envelope is cleared; a crash in between leaves the send pending, and the retry writes the record.
+The operation digest is lowercase hex `SHA-256(UTF-8("ace.intent.v1") ‖ 0x00 ‖ UTF-8(JSON(T(value))))`. `JSON` is compact JSON with raw Unicode and `/`, escaping only quotes, backslashes and controls as in § Envelope Fingerprint of 04. `T` removes differences in platform number formatting:
+
+- null → `["null"]`; boolean → `["boolean","true"]` or `["boolean","false"]`; string → `["string",value]`.
+- number → `["number",hex]`, where `hex` is the 16 lowercase hex digits of its finite IEEE 754 binary64 big-endian representation; both zeros use `0000000000000000`. An integer input that cannot be represented exactly as binary64 MUST be rejected, not rounded; use a string for exact large quantities.
+- array → `["array",T(item1),…]`.
+- object → `["object",[key1,T(value1)],…]`, with keys in ascending UTF-8 byte order.
+
+Unpaired Unicode surrogates MUST be rejected. This digest is local operation identity, not an execution authorization, public commitment or signature. It treats `1`, `1.0` and `1e0` as the same number, while preserving the distinction between numbers, strings, arrays and objects.
+
+Before invoking any transport for a `request`, persist its correlation in `requests/` under the requests lock, then release the lock. A failed write MUST prevent sending. A lost transport acknowledgement MUST NOT remove that correlation: the peer may already have replied. Receiver deduplication and durable idempotent host effects remain required; this does not promise exactly-once network delivery.
+
+A pending envelope rejected as expired may be re-signed with the same message ID only when it is neither completed/abandoned nor a request with a `ttl`. Re-signing a request must not extend its authorization deadline. A new intended action requires a new operation key and a fresh authorization.
 
 ## Signature Verification
 
@@ -250,8 +271,8 @@ Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) �
 | Delegate impersonating its principal | Principal attestation signed by the account key over the subject key + same-account rule (09-principal.md) |
 | Relay-forged principal | Principal signature verified by every client + signer-binding step (09-principal.md § Same-Account Rules rule 4) |
 | Encryption-key rollback | Rollback barrier on signed `registeredAt` |
-| Sender state compromise | Nothing recoverable: encapsulation randomness and shared secrets are destroyed after use |
-| State-skipping (e.g., invoice without accept) | Mandatory state machine per (conversationId, threadId) |
+| Sender KEM randomness compromise after erasure | Past sent message keys cannot be reconstructed from erased KEM randomness; application plaintext, logs, backups and the sender’s recipient key remain separate exposures |
+| State-skipping (e.g., invoice without accept) | Explicitly installed commerce state machine per (conversationId, threadId) |
 | Role confusion (e.g., seller sends `accept`) | Sender roles in the transition table |
 | Third-party injection into a thread | Parties fixed by the first message |
 | Double-spend (duplicate receipt) | State machine rejects repeated transitions |
@@ -264,7 +285,7 @@ Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) �
 |--------|-------|
 | Endpoint availability (DDoS) | Transport-level concern, not protocol-level |
 | Malicious agent behavior | Handled by reputation (ERC-8004) and settlement mechanisms |
-| Recipient encryption key compromise | Exposes all messages to that key, past and future, until rotated via a new binding. No ratchet in ACE 1.0. |
+| Recipient encryption key compromise | Exposes the static control frames to that key until rotated via a new binding. Application deliveries run over fresh MLS groups ([13-session-core.md](./13-session-core.md)) and are not exposed by a later static-key compromise once ephemeral state is erased. |
 | Quantum forgery of classical signatures | Not retroactive; see § Post-Quantum Posture |
 | Side-channel attacks on encryption | Implementation concern, not protocol-level |
 
@@ -276,7 +297,7 @@ Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) �
 | Message authentication | Classical — `ed25519`, `secp256k1` | A signature is only ever checked at receipt time; there is no retroactive attack. Keeping classical keys keeps the ACE identity equal to the agent's chain key |
 | Reserved | `ml-dsa-65` (FIPS 204), see [signing-schemes/ml-dsa-65.md](./signing-schemes/ml-dsa-65.md) | Promoted when a supported chain exposes a post-quantum signature precompile or when classical signatures are deprecated for the deployment |
 
-Pure (non-hybrid) ML-KEM is deliberately not used: every production deployment of post-quantum key exchange (Apple, Signal, Chrome, Cloudflare, IETF TLS/MLS suites) is hybrid, so a lattice break does not leave the protocol weaker than classical X25519.
+The hybrid construction retains X25519 as a defense if ML-KEM is broken. For a raw X-Wing packet this property does not provide forward secrecy after theft of the recipient’s static private key, post-compromise security, traffic-analysis resistance or authorization correctness. The integrated [secure delivery profile](./13-session-core.md) adds fresh classical MLS groups and explicit admission; its narrower network-capture guarantee does not cover stored plaintext or post-quantum authentication.
 
 ## SDK Error Codes
 
@@ -284,12 +305,13 @@ An SDK reports every failure as one error type carrying a `code`. The `category`
 
 | Category | Codes |
 |----------|-------|
-| `permanent` | `invalid_argument`, `invalid_envelope`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `scheme_mismatch`, `stale_timestamp`, `replay`, `decryption_failed`, `invalid_body`, `transition_not_allowed`, `wrong_role`, `wrong_party`, `bad_reference`, `limit_exceeded`, `invalid_key`, `invalid_registration`, `invalid_profile`, `invalid_peer`, `invalid_principal`, `wrong_principal`, `stale_peer_binding`, `unknown_peer`, `not_registered`, `relay_rejected`, `envelope_expired`, `pending_send_conflict`, `blocked_address`, `direct_rejected` |
+| `permanent` | `invalid_argument`, `invalid_envelope`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `scheme_mismatch`, `stale_timestamp`, `replay`, `decryption_failed`, `invalid_body`, `transition_not_allowed`, `wrong_role`, `wrong_party`, `bad_reference`, `limit_exceeded`, `invalid_key`, `invalid_registration`, `invalid_profile`, `invalid_peer`, `invalid_principal`, `wrong_principal`, `stale_peer_binding`, `unknown_peer`, `not_registered`, `relay_rejected`, `envelope_expired`, `pending_send_conflict`, `blocked_address`, `direct_rejected`, `delivery_rejected` |
 | `transient` | `relay_unavailable`, `relay_protocol_error`, `fetch_failed`, `direct_unavailable` |
 | `local` | `storage_failed`, `identity_unavailable`, `handler_failed`, `receiver_busy`, `lock_busy` |
 
 - `lock_busy`: a store lock is held by another holder and was not acquired within the lock timeout (default 10 s). `storage_failed` is reserved for I/O failures.
 - `direct_rejected`: the receiver's direct endpoint answered 400 or 413 ([08-relay.md](./08-relay.md) § Direct Delivery). The error carries the receiver's `error` string as its remote code only when that string matches `^[a-z0-9_]{1,64}$`; any other value is peer-controlled text and is dropped.
+- `delivery_rejected`: the secure-delivery receipt ([13-session-core.md](./13-session-core.md) § Normative delivery transcript) reports that the recipient's Inbox permanently rejected the inner envelope; `remoteCode` is its pipeline error code. The operation stays pending for the host to abandon and is never retried automatically.
 - `direct_unavailable`: the direct endpoint could not be reached or answered anything other than 2xx `{"ok":true}`, 400 or 413 (network failure, timeout, 429, 503, other statuses).
 - Relay HTTP responses map onto these codes as specified in [08-relay.md](./08-relay.md) § Client Rules.
 
@@ -317,16 +339,23 @@ The ACE SDKs persist pipeline state in a key-value store with these keys, so tha
 | Key | Content |
 |-----|---------|
 | `replay.json` | `{"entries":[[messageId,from,timestamp],…],"horizon":H,"senderHorizons":{from:H[from]},"version":1}`; entries in seen-store order |
-| `cursors.json` | `{"cursors":{"<normalized relay URL, 08-relay.md § Client Rules>":"<ms>-<seq>"},"version":1}` |
 | `threads/<sha256(conversationId ‖ 0x00 ‖ threadId)>.json` | `{"conversationId","history":[{"from","messageId","timestamp","type"}],"localAceId","peerAceId","pending":null\|PendingSend,"state","threadId","version":1}` |
-| `outbox/<sha256(requestId)>.json` | `{"message":Envelope,"requestId","requestTtl"?:int,"stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends; `requestTtl` is optional and omitted when absent, see `PendingSend` below) |
-| `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","source":"relay"\|"direct","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
-| `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","source":"relay","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
-| `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` | `{"conversationId","decision":null\|{"messageId","outcome","timestamp"},"expiresAt":null\|int,"messageId","sentAt","to","version":1}`; written by the Outbox after a `request` is delivered (before the pending send is cleared); `decision` filled when the Inbox accepts a `decision` for it ([09-principal.md](./09-principal.md) § Persistence). `sentAt` is the sender's local clock (Unix seconds) when the record is written, not the envelope `timestamp`. Deletable 30 days after `sentAt` |
-| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string\|null,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load; the cached principal is stored as `profile.principal` whatever the source (relay profile or registration-file top-level `principal`), pinned with the profile and re-verified on load with `fetchedAt` as the time (an expired-only principal is dropped, not an error) |
-| `locks/<name>.lock` | File-store internal: `{"createdAt","host","pid"}`; `name` matches `^[a-z0-9][a-z0-9_-]{0,63}$` |
+| `outbox/<sha256(requestId)>.json` | `{"intentDigest","message":Envelope,"type","schemaDigest","threadId"?:string,"requestId","requestTtl"?:int,"stagedAt","status":"pending"\|"expired","version":1}` (non-economic pending sends; `requestTtl` is optional and omitted when absent, see `PendingSend` below) |
+| `deliveries/<sha256(from ‖ 0x00 ‖ messageId)>.json` | `{"fingerprint","message":{"body","conversationId","from","messageId","threadId":string\|null,"timestamp","to","type"},"receivedAt","status":"pending"\|"acked","thread":ThreadSnapshot\|null,"version":1}` |
+| `quarantine/<fingerprint>.json` | `{"code","envelope":{known fields},"fingerprint","quarantinedAt","reason","version":1}`; `reason` at most 1000 characters. At most 1000 records: when exceeded, the oldest by `(quarantinedAt, fingerprint)` are deleted down to 900 |
+| `sent/<sha256(requestId)>.json` | Same versioned record as `outbox/`, retained after acknowledgement or abandonment to prevent operation-key reuse; never time-pruned automatically |
+| `principal-horizons/<sha256(aceId ‖ 0x00 ‖ account ‖ 0x00 ‖ signer.scheme ‖ 0x00 ‖ signer.publicKey)>.json` | `{"aceId","principal":PrincipalRecord,"version":1}`; highest adopted signed principal, independent of cache lifetime; verify the signature on load and never delete on expiry or key rotation |
+| `requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` | `{"conversationId","decision":null\|{"messageId","outcome","timestamp"},"expiresAt":null\|int,"messageId","sentAt","to","version":1}`; written by the Outbox before invoking transport for a `request`; `decision` filled when the Inbox accepts a `decision` for it ([09-principal.md](./09-principal.md) § Persistence). `sentAt` is the sender's local clock (Unix seconds) when the record is written, not the envelope `timestamp`. Deletable 30 days after `sentAt` |
+| `peers/<sha256(aceId)>.json` | `{"aceId","encryptionPublicKey","fetchedAt","profile":object\|null,"registeredAt","registrationSignature":string,"scheme","signingPublicKey","source":"relay"\|"registration","version":1}`; keys Base64. Re-verified on load; the cached principal is stored as `profile.principal` whatever the source (relay profile or registration-file top-level `principal`), pinned with the profile and re-verified on load with `fetchedAt` as the time (an expired-only principal is dropped, not an error) |
+| `secure/cursors/<sha256(normalized relay URL)>.json` | `{"cursor":"<ms>-<seq>","identity":"<own aceId>","version":1}`; the receiver's durable mailbox cursor for that relay ([13-session-core.md](./13-session-core.md)); the relay URL is normalized per [08-relay.md](./08-relay.md) § Client Rules, so equivalent spellings share one cursor |
+| `secure/peers/<sha256(aceId)>.json` | `{"allowed":bool,"generation":int,"peer":"<aceId>","version":1}`; the local admission policy for one peer; `generation` increases on every change, so revoking invalidates unfinished handshakes |
+| `secure/in/<attempt>.json` | `{"expiresAt":int,"generation":int,"peer":"<aceId>","response":Envelope,"version":1}` while the offer is outstanding; after decryption also `"input":hex, "envelope":Envelope\|null, "outcome":null\|"delivered"\|"duplicate"\|"rejected:<code>"` with `response` null — the inner envelope until it is handed over, then the recorded outcome with the encrypted receipt in `response` and `envelope` null; swept after `expiresAt` |
+| `mls/gates/<context>.json` | `{"closed":bool,"context","generation":int,"local","peer","signatureKey","version":1}`; the non-secret context gate of [13-session-core.md](./13-session-core.md) § Generation barrier; deleted when the context completes |
+| `locks/<name>.lock` | File-store internal: permanent regular file, locked with exclusive POSIX `flock` on a local filesystem; never unlink or replace it; `name` matches `^[a-z0-9][a-z0-9_-]{0,63}$` |
 
-- `PendingSend` is `{"message":Envelope,"requestId","requestTtl"?,"stagedAt","status"}`. `requestTtl` is an optional wire integer, present only for a pending `request` whose body carried `ttl`; a retry uses it to compute the `requests/` record's `expiresAt`, because the body is encrypted to the recipient and the sender cannot re-read it. The member is omitted when absent, so canonical JSON stays valid. Inside a thread record it has no `version`. A thread has at most one pending send.
+- `PendingSend` is `{"intentDigest","message":Envelope,"type","schemaDigest","threadId"?:string,"requestId","requestTtl"?,"stagedAt","status"}`. `requestTtl` is an optional wire integer, present only for a pending `request` whose body carried `ttl`; a retry uses it to compute the `requests/` record's `expiresAt`, because the body is encrypted to the recipient and the sender cannot re-read it. The member is omitted when absent, so canonical JSON stays valid. Inside a thread record it has no `version`. A thread has at most one pending send.
 - `ThreadSnapshot` is the thread record without `pending` and `version`.
 - Envelopes use the wire shape. Timestamps are Unix seconds.
-- A delivery record whose status is `acked` is deleted once its timestamp is covered by `H` or `H[from]`. Terminal threads with no pending send are deleted after the 30-day retention ([04-messages.md](./04-messages.md) § Implementation Requirements).
+- A delivery record whose status is `acked` is deleted once its timestamp is covered by `H` or `H[from]` of the written `replay.json` (§ Durable Delivery). Terminal threads with no pending send are deleted after the 30-day retention ([04-messages.md](./04-messages.md) § Implementation Requirements).
+
+FileStore locks are kernel-owned and are released when their open description closes or the process exits. Do not infer ownership from file contents, wall-clock age or PID checks. An unavailable native locking backend is a storage failure, never a fallback to unlocked access. Network filesystems and independently copied authority state are unsupported.

@@ -41,11 +41,11 @@ const AUTH: Record<string, any> = {
   listen: { action: 'listen', since: '-' },
   inbox: { action: 'inbox', since: '1700000000000-0', limit: 50 },
   unregister: { action: 'unregister' },
-  intent: { action: 'intent', need: 'Translate EN→FR', tags: ['nlp', 'fr'], maxPrice: '10', currency: 'USDC', ttl: 3600 },
+  intent: { action: 'intent', need: 'Translate EN→FR', tags: ['nlp', 'fr'], ext: { 'urn:ace:commerce:1': { maxPrice: '10', currency: 'USDC' } }, ttl: 3600 },
 };
 const profile = (lang: string) => ({
   name: `Agent ${lang} é`, description: 'interop / matrix', tags: ['interop', 'ace'],
-  capabilities: ['translate'], endpoint: `https://${lang}.example/ace`, pricing: { currency: 'USDC', maxAmount: '10' },
+  capabilities: ['translate'], endpoint: `https://${lang}.example/ace`, ext: { 'urn:ace:commerce:1': { pricing: { currency: 'USDC', maxAmount: '10' } } },
 });
 const textBody = (s: string, r: string, sch: string) => ({ message: `hello ${s}→${r} (${sch}) héllo 世界 / "q" \\ ✓` });
 const RFQ = { need: 'Translate 500 words EN→FR', maxPrice: '10.50', currency: 'USDC', ttl: 3600 };
@@ -53,7 +53,7 @@ const OFFER = { price: '9.75', currency: 'USDC', terms: 'delivery in 24h / net',
 
 // Principal fixtures (same values in every language; 09-principal). One shared CAIP-10 account; the controller
 // signer (owner key) of scheme s is a v4 test-vectors agent (ed25519: alice, secp256k1: bob). `<lang>-<s>` is a
-// delegate (["agent"]), `<lang>-<s>-rx` a controller (["controller"]).
+// delegate (["delegate"]), `<lang>-<s>-rx` a controller (["controller"]).
 const VECTORS = JSON.parse(fs.readFileSync(
   process.env.ACE_VECTORS || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'test-vectors.json'), 'utf8'));
 const ACCOUNT = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:InteropOwner1111111111111111111111111111111';
@@ -85,7 +85,7 @@ const peerOf = (lang: string, s: string) => ace.verifyRegistrationFile(rd(`ids/$
 const principalPeer = (lang: string, s: string) => ace.verifyRegistrationFile(rd(`ids/${lang}-${s}.json`).registrationFilePrincipal);
 const summary = (p: any) => ({
   messageId: p.messageId, from: p.from, to: p.to, conversationId: p.conversationId,
-  type: p.type, threadId: p.threadId ?? null, timestamp: p.timestamp, body: p.body,
+  type: p.type, schemaDigest: p.schemaDigest, threadId: p.threadId ?? null, timestamp: p.timestamp, body: p.body,
 });
 const peerSummary = (p: any) => ({
   aceId: p.aceId, scheme: p.scheme, signingPublicKey: b64(p.signingPublicKey),
@@ -103,24 +103,24 @@ async function gen() {
     const auth: Record<string, any> = {};
     for (const [k, req] of Object.entries(AUTH)) auth[k] = { headers: await ace.createAuthHeaders(id, req, ts) };
     const principal = await ace.createPrincipalRecord(ace.principalSignerFromIdentity(owner(s.replace('-rx', ''))), {
-      subjectSigningPublicKey: id.getSigningPublicKey(), account: ACCOUNT, roles: s.endsWith('-rx') ? ['controller'] : ['agent'],
-      scope: SCOPE, expiresAt: ts + 3600, issuedAt: ts,
+      subjectSigningPublicKey: id.getSigningPublicKey(), account: ACCOUNT, roles: s.endsWith('-rx') ? ['controller'] : ['delegate'],
+      expiresAt: ts + 3600, issuedAt: ts,
     });
     wr(`ids/${LANG}-${s}.json`, {
       lang: LANG, scheme: s.replace('-rx', ''), export: id.exportPrivateKey(), aceId: id.getACEId(), address: id.getAddress(),
       signingPublicKey: b64(id.getSigningPublicKey()), encryptionPublicKey: b64(id.getEncryptionPublicKey()),
-      registrationFile: ace.createRegistrationFile(id, { name: `Agent ${LANG} ${s}`, endpoint: `https://${LANG}.example/ace` }),
+      registrationFile: await ace.createRegistrationFile(id, { name: `Agent ${LANG} ${s}`, endpoint: `https://${LANG}.example/ace` }),
       registrationRequest: await ace.createRegistrationRequest(id, profile(LANG) as any, ts),
       auth,
       principal,
-      registrationFilePrincipal: ace.createRegistrationFile(id, { name: `Agent ${LANG} ${s}`, endpoint: `https://${LANG}.example/ace`, principal }),
+      registrationFilePrincipal: await ace.createRegistrationFile(id, { name: `Agent ${LANG} ${s}`, endpoint: `https://${LANG}.example/ace`, principal }),
       registrationRequestPrincipal: await ace.createRegistrationRequest(id, { ...profile(LANG), principal } as any, ts),
     });
   }
   for (const s of SCHEMES) {
     const subject = ace.fromBase64(FIXED_SUBJECT);
     const record = await ace.createPrincipalRecord(ace.principalSignerFromIdentity(owner(s)), {
-      subjectSigningPublicKey: subject, account: ACCOUNT, roles: ['agent'], scope: SCOPE,
+      subjectSigningPublicKey: subject, account: ACCOUNT, roles: ['delegate'], scope: SCOPE,
       expiresAt: FIXED_ISSUED_AT + 3600, issuedAt: FIXED_ISSUED_AT,
     });
     wr(`fixed/${LANG}-${s}.json`, {
@@ -134,13 +134,13 @@ async function verify() {
   for (const src of LANGS) for (const s of SCHEMES) {
     const d = rd(`ids/${src}-${s}.json`);
     const r: any = {};
-    r.import = await attempt(() => {
+    r.import = await attempt(async () => {
       const idn = ace.SoftwareIdentity.fromExport(d.export);
       return {
         aceId: idn.getACEId(), address: idn.getAddress(), scheme: idn.getSigningScheme(),
         signingPublicKey: b64(idn.getSigningPublicKey()), encryptionPublicKey: b64(idn.getEncryptionPublicKey()),
         reexport: idn.exportPrivateKey(),
-        registrationFile: ace.createRegistrationFile(idn, { name: d.registrationFile.name, endpoint: d.registrationFile.endpoint }),
+        registrationFile: await ace.createRegistrationFile(idn, { name: d.registrationFile.name, endpoint: d.registrationFile.endpoint, timestamp: d.registrationFile.registeredAt }),
       };
     });
     let peer: any = null;
@@ -170,8 +170,9 @@ async function send1() {
       const threadId = `deal/${key}/✓`;
       const tb = textBody(LANG, R, s);
       const text = await ace.createMessage({ sender: me, recipient: peer, type: 'text', body: tb, threads });
+      const custom = await ace.createMessage({ sender: me, recipient: peer, type: 'urn:example:task:1', schemaDigest: 'ab'.repeat(32), body: { task: '你好' }, threadId: 'private' });
       const rfq = await ace.createMessage({ sender: me, recipient: peer, type: 'rfq', threadId, body: RFQ, threads });
-      wr(`msgs/m1/${key}.json`, { threadId, textBody: tb, rfqBody: RFQ, text, rfq });
+      wr(`msgs/m1/${key}.json`, { threadId, textBody: tb, rfqBody: RFQ, text, rfq, custom });
       wr(`priv/${LANG}/threads-${R}-${s}.json`, threads.exportState());
     } catch (e) {
       wr(`msgs/m1/${key}.json`, { error: fail(e) });
@@ -196,6 +197,7 @@ async function recv1() {
       const threads = new ace.ThreadStateMachine({ localAceId: me.getACEId() });
       const replay = new ace.ReplayDetector();
       const parse = async (env: any) => summary(await ace.parseMessage(ace.decodeEnvelope(env), me, peer, { threads, replay }));
+      r.custom = await attempt(() => parse(m.custom));
       r.text = await attempt(() => parse(m.text));
       r.rfq = await attempt(() => parse(m.rfq));
       r.replayAgain = await attempt(() => parse(m.text));
@@ -252,15 +254,15 @@ async function persist() {
       const peers = new ace.PeerStore({ store });
       for (const S of LANGS) await peers.pinRegistrationFile(rd(`ids/${S}-${s}.json`).registrationFile);
       let handed = 0;
-      const inbox = await ace.Inbox.open({ identity: me, store, peers, onMessage: () => { handed++; } });
+      const inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, onMessage: () => { handed++; } });
       try {
         for (const S of LANGS) {
           const m = rd(`msgs/m1/${S}-${LANG}-${s}.json`);
           if (m.error) throw new Error(`sender ${S} failed: ${JSON.stringify(m.error)}`);
           r.receives[S] = {
-            text: outcome(await inbox.receive(wire(m.text), { kind: 'direct' })),
-            rfq: outcome(await inbox.receive(wire(m.rfq), { kind: 'direct' })),
-            textAgain: outcome(await inbox.receive(wire(m.text), { kind: 'direct' })),
+            text: outcome(await inbox.receive(wire(m.text))),
+            rfq: outcome(await inbox.receive(wire(m.rfq))),
+            textAgain: outcome(await inbox.receive(wire(m.text))),
           };
         }
       } finally {
@@ -322,10 +324,10 @@ async function load() {
       });
       r.inboxReopen = await attempt(async () => {
         let handed = 0;
-        const inbox = await ace.Inbox.open({ identity: me, store, peers, onMessage: () => { handed++; } });
+        const inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, onMessage: () => { handed++; } });
         try {
           const m = rd(`msgs/m1/${LANGS[0]}-${R}-${s}.json`);
-          const dup = outcome(await inbox.receive(wire(m.rfq), { kind: 'direct' }));
+          const dup = outcome(await inbox.receive(wire(m.rfq)));
           return { handedOnOpen: handed, duplicate: dup };
         } finally {
           await inbox.close();
@@ -379,7 +381,7 @@ async function psend() {
     let store: any, outbox: any;
     try {
       store = new FileStore(P(`pstores/${LANG}-${s}`));
-      outbox = await ace.Outbox.open({ identity: identity(LANG, s), store });
+      outbox = await ace.Outbox.open({ commerce: true, identity: identity(LANG, s), store });
     } catch (e) {
       for (const R of LANGS) wr(`msgs/p1/${LANG}-${R}-${s}.json`, { error: fail(e) });
       continue;
@@ -414,7 +416,7 @@ async function precv() {
       const store = new FileStore(P(`pstores/${LANG}-${rx(s)}`));
       const peers = new ace.PeerStore({ store });
       for (const S of LANGS) await peers.pinRegistrationFile(rd(`ids/${S}-${s}.json`).registrationFilePrincipal);
-      inbox = await ace.Inbox.open({ identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
+      inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
     } catch (e) {
       for (const S of LANGS) out[`${S}-${LANG}-${s}`] = { error: fail(e) };
       continue;
@@ -429,7 +431,7 @@ async function precv() {
           if (m.error) throw new Error(`sender failed: ${JSON.stringify(m.error)}`);
           const peer = principalPeer(S, s);
           for (const k of ['request', 'report']) {
-            r[k] = outcome(await inbox.receive(wire(m[k]), { kind: 'direct' }));
+            r[k] = outcome(await inbox.receive(wire(m[k])));
             r[`${k}Parsed`] = handed.get(m[k].messageId) ?? null;
           }
           r.noContext = await attempt(async () => summary(await parseFresh(m.report, me, peer)));
@@ -463,7 +465,7 @@ async function pdecide() {
       store = new FileStore(P(`pstores/${LANG}-${s}`));
       const peers = new ace.PeerStore({ store });
       for (const R of LANGS) await peers.pinRegistrationFile(rd(`ids/${R}-${rx(s)}.json`).registrationFilePrincipal);
-      inbox = await ace.Inbox.open({ identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
+      inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
     } catch (e) {
       for (const R of LANGS) out[`${R}-${LANG}-${s}`] = { error: fail(e) };
       continue;
@@ -477,7 +479,7 @@ async function pdecide() {
           const m = rd(`msgs/p2/${key}.json`);
           const req = rd(`msgs/p1/${LANG}-${R}-${s}.json`).request;
           for (const [k, env] of [['decision', 'decision'], ['decisionAgain', 'decision'], ['decision2', 'decision2'], ['report', 'report']]) {
-            r[k] = outcome(await inbox.receive(wire(m[env]), { kind: 'direct' }));
+            r[k] = outcome(await inbox.receive(wire(m[env])));
           }
           r.decisionParsed = handed.get(m.decision.messageId) ?? null;
           r.reportParsed = handed.get(m.report.messageId) ?? null;

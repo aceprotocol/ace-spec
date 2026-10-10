@@ -38,7 +38,7 @@ The scheme is lowercase `https` only. Userinfo, IPv6 literals and trailing dots 
 
 ### Thread IDs
 
-A thread ID is a string of 1..`MAX_THREAD_ID_LENGTH` (256) code points containing no U+0000–U+001F or U+007F. The empty string is invalid. For the envelope `threadId`, a JSON `null` is always rejected; an absent `threadId` is the only way to omit it. Inside message bodies (for example `ref.threadId`, [09-principal.md](./09-principal.md)), a `null` optional field is treated as absent under § Body Rules.
+A thread ID is a string of 1..`MAX_THREAD_ID_LENGTH` (256) code points containing no U+0000–U+001F or U+007F. The empty string is invalid. For the private-content `threadId`, a JSON `null` is always rejected; an absent `threadId` is the only way to omit it. Inside message bodies (for example `ref.threadId`, [09-principal.md](./09-principal.md)), a `null` optional field is treated as absent under § Body Rules.
 
 ## Size Limits
 
@@ -46,10 +46,10 @@ Normative constants. Every implementation and every relay uses these values.
 
 | Name | Value | Meaning |
 |------|-------|---------|
-| `MAX_PLAINTEXT_BYTES` | 65508 | UTF-8 body JSON before encryption |
+| `MAX_PLAINTEXT_BYTES` | 65508 | UTF-8 private-content JSON before encryption |
 | `MAX_PAYLOAD_BYTES` | 65536 | `nonce ‖ ciphertext ‖ tag` (decoded `encryption.payload`) |
 | `MAX_ENVELOPE_BYTES` | 131072 | Serialized envelope; SSE data limit |
-| `MAX_JSON_DEPTH` | 32 | Body nesting depth; the top-level object is depth 0 |
+| `MAX_JSON_DEPTH` | 32 | Private-content nesting depth; its top-level object is depth 0 |
 | `MAX_THREAD_ID_LENGTH` | 256 | Code points |
 | `MAX_OPEN_THREADS_PER_PEER` | 1000 | non-terminal threads held per peer |
 | `TIMESTAMP_WINDOW_SECONDS` | 300 | Future bound for messages; freshness window for relay requests |
@@ -58,7 +58,7 @@ Normative constants. Every implementation and every relay uses these values.
 | `MAX_INBOX_PAGE` | 100 | Maximum `limit` of `GET /v1/inbox` |
 | `MAX_DIRECT_BODY_BYTES` | 132096 | `MAX_ENVELOPE_BYTES + 1024`; direct-delivery and relay request body ([08-relay.md](./08-relay.md) § Direct Delivery, § Limits) |
 
-`MAX_PLAINTEXT_BYTES + 28 = MAX_PAYLOAD_BYTES`. A sender MUST reject a body whose serialization exceeds `MAX_PLAINTEXT_BYTES` before encrypting. A transport MUST reject a serialized envelope larger than `MAX_ENVELOPE_BYTES` before parsing it.
+`MAX_PLAINTEXT_BYTES + 28 = MAX_PAYLOAD_BYTES`. A sender MUST reject a body whose complete private-content serialization exceeds `MAX_PLAINTEXT_BYTES` before encrypting. A transport MUST reject a serialized envelope larger than `MAX_ENVELOPE_BYTES` before parsing it.
 
 ## Message Envelope
 
@@ -66,15 +66,12 @@ Every ACE message uses this envelope format:
 
 ```json
 {
-  "ace": "1.0",
+  "ace": "2.0",
   "messageId": "550e8400-e29b-41d4-a716-446655440000",
   "from": "ace:sha256:sender_fingerprint",
   "to": "ace:sha256:recipient_fingerprint",
   "conversationId": "hex(SHA-256(sort(pubA, pubB)))",
-  "type": "rfq",
-  "threadId": "deal-2026-03-13-gpu-rental",
   "timestamp": 1741000000,
-  "body": {},
 
   "encryption": {
     "kemCiphertext": "Base64(X-Wing ciphertext[1120])",
@@ -91,23 +88,43 @@ Every ACE message uses this envelope format:
 
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
-| `ace` | Yes | string | Protocol version. MUST be `"1.0"` |
+| `ace` | Yes | string | Packet version. MUST be `"2.0"` |
 | `messageId` | Yes | string | Lowercase UUID v4, unique per sender |
 | `from` | Yes | string | Sender's ACE ID |
 | `to` | Yes | string | Recipient's ACE ID |
 | `conversationId` | Yes | string | Deterministic conversation identifier: 64 lowercase hex characters (see [03-encryption.md](./03-encryption.md)) |
-| `type` | Yes | string | Message type (see § Message Types). A type not defined in § Message Types MUST be rejected. |
-| `threadId` | Conditional | string | Business session identifier, a thread ID (§ Encoding Rules). **REQUIRED for all economic messages**, optional for system, social and principal messages. Allows multiple concurrent deals between the same agent pair within one `conversationId`. Chosen by the initiator (e.g., UUID, deal reference). All messages in a business flow MUST share the same `threadId`. |
 | `timestamp` | Yes | integer | Unix timestamp in seconds (wire integer) |
-| `body` | — | object | Message payload (schema depends on `type`). **Conceptual only**: in transit, the body is encrypted inside `encryption.payload`. Not present as a cleartext field on the wire. |
 | `encryption` | Yes | object | Encryption envelope (see [03-encryption.md](./03-encryption.md)) |
 | `signature` | Yes | object | Message signature |
 | `signature.scheme` | Yes | string | Signing scheme used. MUST equal the sender's registered scheme. |
 | `signature.value` | Yes | string | Signature value (§ Signature Encoding by Scheme) |
 
-### Note on Encryption
+### Private content
 
-The `body` field in the envelope above shows the **decrypted** content for readability. In transit, the body is encrypted inside `encryption.payload`. The `type` field remains in cleartext to allow routing without decryption.
+The encrypted plaintext is exactly this JSON object:
+
+```json
+{
+  "type": "urn:example:task:1",
+  "schemaDigest": "abababababababababababababababababababababababababababababababab",
+  "threadId": "private-workflow",
+  "body": { "text": "Please summarize this document" }
+}
+```
+
+`type`, `schemaDigest` and `body` are required; `threadId` is optional. No other private-content keys are accepted. `body` is a JSON object. Plain text uses the bundled `text` profile with `{"message":"…"}`. The depth and plaintext byte limits apply to the entire private-content object, including its wrapper.
+
+A type is either a bundled profile name below, or an ASCII namespaced identifier of at most 256 bytes matching:
+
+```
+^[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$
+```
+
+Identifiers are opaque; parsing MUST NOT fetch a URI or execute code. `schemaDigest` is 64 lowercase hex characters. Senders MUST supply it for custom types. A receiver retains unknown types and digests as authenticated data. A host MAY install a deterministic validator per `schemaDigest` (SDK `Inbox.open` / `Outbox.open` `schemas`); a message whose installed validator fails is rejected at pipeline step 6 of [06-security.md](./06-security.md). Execution still requires a separately installed authorization policy. Text, a type name and a digest confer no authority.
+
+Bundled profiles use SHA-256 of compact, sorted-key UTF-8 JSON of `{type, fields, outcomes, version:1}`. `fields` is the ordered list of `[fieldName, kind]` from the profile tables (`str`, `optStr`, `obj`, `optObj`, `optTtl`); `outcomes` is the ordered allowed-outcome array, or `[]`. Version 1 identifies all bundled validation rules in this document, including references and delivery variants. A change to those rules requires a new profile version and digest. The `text` digest is `c82da8dde17338c28c42d2a6fad644961c3e7a8d1d008f9d2b18e8d624cf4a52`. All SDKs reject a different digest for a bundled profile.
+
+Relays route by recipient. They cannot inspect the type, schema, business thread or body. Endpoints, sender/recipient IDs, conversation ID, timing and ciphertext size remain observable; this envelope does not provide metadata anonymity.
 
 ### Envelope Decoding
 
@@ -116,23 +133,21 @@ A received envelope is accepted only if all of the following hold. `ace` is chec
 | Field | Rule |
 |-------|------|
 | (envelope) | A JSON object |
-| `ace` | A string. Any value other than `"1.0"` fails with `unsupported_version`; a missing or non-string `ace` fails with `invalid_envelope` |
+| `ace` | A string. Any value other than `"2.0"` fails with `unsupported_version`; a missing or non-string `ace` fails with `invalid_envelope` |
 | `messageId` | `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$` (lowercase only) |
 | `from`, `to` | `^ace:sha256:[0-9a-f]{64}$` |
 | `conversationId` | `^[0-9a-f]{64}$` |
-| `type` | One of the 13 types in § Message Types |
-| `threadId` | Absent, or a valid thread ID. `null` is rejected. Economic types require it. |
 | `timestamp` | Wire integer |
 | `encryption.kemCiphertext` | Canonical Base64 of exactly 1120 bytes |
 | `encryption.payload` | Canonical Base64; decoded length in `[28, MAX_PAYLOAD_BYTES]` |
 | `signature.scheme` | `ed25519` or `secp256k1` |
 | `signature.value` | `ed25519`: canonical Base64 of exactly 64 bytes. `secp256k1`: `^0x[0-9a-f]{130}$` |
 
-Unknown fields at any level (the envelope, `encryption`, `signature`) are ignored. The behavior on duplicate JSON keys is unspecified.
+The cleartext envelope MUST reject `type`, `threadId`, `schemaDigest` and `body`, even if null. Other unknown fields in the envelope, `encryption` and `signature` are ignored. The behavior on duplicate JSON keys is unspecified.
 
 ### Envelope Fingerprint
 
-The fingerprint of an envelope is the lowercase hex `SHA-256` of the RFC 8785 (JCS) serialization of its known fields only: `ace`, `messageId`, `from`, `to`, `conversationId`, `type`, `threadId` (omitted when absent), `timestamp`, `encryption` (`kemCiphertext`, `payload`) and `signature` (`scheme`, `value`). Unknown fields at every level are dropped first, so two envelopes that differ only in unknown fields have the same fingerprint. Concretely: keys sorted; strings escape only `"`, `\` and control characters (`\b \f \n \r \t`, others as lowercase `\u00xx`); non-ASCII is emitted as raw UTF-8; `/` is not escaped; `timestamp` is `decimal(timestamp)`.
+The fingerprint of an envelope is the lowercase hex `SHA-256` of the RFC 8785 (JCS) serialization of its known fields only: `ace`, `messageId`, `from`, `to`, `conversationId`, `timestamp`, `encryption` (`kemCiphertext`, `payload`) and `signature` (`scheme`, `value`). Unknown fields at every level are dropped first, so two envelopes that differ only in unknown fields have the same fingerprint. Concretely: keys sorted; strings escape only `"`, `\` and control characters (`\b \f \n \r \t`, others as lowercase `\u00xx`); non-ASCII is emitted as raw UTF-8; `/` is not escaped; `timestamp` is `decimal(timestamp)`.
 
 ### Body Rules
 
@@ -182,22 +197,24 @@ The complete list. A signature produced under one action MUST NOT verify under a
 
 | Action | Context | Payload |
 |--------|---------|---------|
-| `message` | Agent-to-agent messages | `encodePayload(type, to, conversationId, messageId, threadIdOrEmpty, kemCiphertextBytes, payloadBytes)` |
+| `packet` | Agent-to-agent packets | `encodePayload(to, conversationId, messageId, kemCiphertextBytes, payloadBytes)` |
 | `register` | Public encryption-key binding ([02-discovery.md](./02-discovery.md)) | `encodePayload(encryptionPublicKeyB64, signingPublicKeyB64)` |
 | `register-request` | Relay registration write authorization | `registrationPayload` ([02-discovery.md](./02-discovery.md) § Registration authorization) |
 | `listen` | `GET /v1/listen` | `encodePayload(sinceOrDash)` |
 | `inbox` | `GET /v1/inbox` | `encodePayload(sinceOrDash, decimal(limit))` |
 | `unregister` | `POST /v1/unregister` | Empty (0 bytes) |
-| `intent` | `POST /v1/intents` | `encodePayload(need, join(tags, ","), maxPriceOrEmpty, currencyOrEmpty, decimal(ttl))` |
+| `intent` | `POST /v1/intents` | `encodePayload(need, join(tags, ","), extCanonicalOrEmpty, decimal(ttl))` |
 | `webhook` | `PUT` / `GET` / `DELETE /v1/webhook` ([08-relay.md](./08-relay.md) § Webhooks) | `encodePayload(method, urlOrEmpty, secretOrEmpty)` |
+| `grant` | Exact-intent resource capability ([10-resource-grants.md](./10-resource-grants.md)) | `encodePayload(claimsDigest)` |
+| `audit` | Signed log checkpoint ([11-audit.md](./11-audit.md)) | `encodePayload(logId, decimal(size), rootBytes)` |
 | `principal` | Principal attestation ([09-principal.md](./09-principal.md)) | `encodePayload(account, join(roles, ","), signer.scheme, signer.publicKey, subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAtOr0))` |
 
-- For `message`, `aceId` is `from` and `timestamp` is the envelope `timestamp`. `kemCiphertextBytes` and `payloadBytes` are the decoded bytes. `threadIdOrEmpty` is the empty string when `threadId` is absent.
+- For `packet`, `aceId` is `from` and `timestamp` is the envelope `timestamp`. `kemCiphertextBytes` and `payloadBytes` are the decoded bytes.
 - For `register` and `register-request`, `aceId` and `timestamp` are the request's. `encryptionPublicKeyB64` and `signingPublicKeyB64` are the Base64 strings as sent.
 - For `listen`, `inbox`, `unregister`, `intent` and `webhook`, `aceId` and `timestamp` are the `X-ACE-Id` and `X-ACE-Timestamp` headers ([08-relay.md](./08-relay.md) § Authentication). `sinceOrDash` is the `since` value, or `-` when absent. `limit` is the effective limit. `tags` absent is the empty list. For `webhook`, `method` is the uppercase HTTP method as sent (`PUT`, `GET` or `DELETE`). For `GET` and `DELETE`, `urlOrEmpty` and `secretOrEmpty` are empty strings. For `PUT` they are the request body's `url` and `secret`.
 - For `principal`, `aceId` is the **subject's** ACE ID and `timestamp` is `issuedAt`; the signature is made by the record's `signer`, not by the holder of `aceId`. `subjectSigningPublicKeyB64` is computed by the verifier from the subject key it verified; `scopeOrEmpty` is empty when `scope` is absent; `decimal(expiresAtOr0)` is `decimal(expiresAt)` (0 never occurs for a valid record).
 
-`threadId` is part of the signed message payload. Economic thread identity is security-relevant: changing `threadId` changes the signed meaning of the message and MUST invalidate the signature.
+`threadId` is inside the ciphertext covered by the packet signature. Economic thread identity is security-relevant: changing `threadId` changes the signed meaning of the message and MUST invalidate the signature.
 
 `kemCiphertext` (the raw 1120 bytes) is also part of the signed payload. It is the sender's commitment to the key the recipient will derive; a relay that swaps it MUST break the signature, not merely garble decryption.
 
@@ -210,9 +227,13 @@ The complete list. A signature produced under one action MUST NOT verify under a
 
 Decoders MUST reject any other encoding. Verification rules are in [signing-schemes/ed25519.md](./signing-schemes/ed25519.md) and [signing-schemes/secp256k1.md](./signing-schemes/secp256k1.md).
 
-## Message Types
+## Bundled application profiles
 
-ACE 1.0 defines exactly 13 message types: `info`, `text`, the 8 economic types `rfq`, `offer`, `accept`, `reject`, `invoice`, `receipt`, `deliver`, `confirm`, and the 3 principal types `request`, `decision`, `report`.
+These names are conveniences, not a closed protocol type registry. Commerce state transitions are opt-in (`commerce: true` / `commerce=True` in durable SDKs, or an explicit low-level thread machine). The account coordination policy from 09 is also opt-in. Neither is implicit in ordinary transport reception.
+
+### Message Types
+
+The bundled application profiles define 13 reserved names: `info`, `text`, the 8 economic types `rfq`, `offer`, `accept`, `reject`, `invoice`, `receipt`, `deliver`, `confirm`, and the 3 principal types `request`, `decision`, `report`.
 
 ### System Messages
 
@@ -226,7 +247,7 @@ ACE 1.0 defines exactly 13 message types: `info`, `text`, the 8 economic types `
 
 ### Economic Messages
 
-Economic messages carry contractual weight. Schema validation is MANDATORY on both send and receive sides.
+Economic messages are proposals or evidence interpreted by the optional commerce application profile. A received message is never payment authorization. Schema validation is MANDATORY on both send and receive sides.
 
 | Type | Description | Required Fields | Optional Fields |
 |------|-------------|-----------------|-----------------|
@@ -238,6 +259,20 @@ Economic messages carry contractual weight. Schema validation is MANDATORY on bo
 | `receipt` | Confirm payment | `referenceId`, `amount`, `currency`, `settlementMethod`, `proof` | |
 | `deliver` | Deliver work product | `type` | `content`, `contentType`, `uri`, `metadata` |
 | `confirm` | Confirm delivery accepted | `deliverId` | `message` |
+
+### Commerce extension (`urn:ace:commerce:1`)
+
+The commerce profile's discovery data lives under the namespaced key `urn:ace:commerce:1` of a profile's, registration file's or intent's `ext` object ([02-discovery.md](./02-discovery.md) § Profile Fields), never in the generic identity or discovery fields:
+
+| Carrier | Member | Rule |
+|---------|--------|------|
+| profile, registration file | `chains` | string[]: CAIP-2 identifiers `^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$`, at most 10 |
+| profile, registration file | `pricing` | `{ "currency": string, "maxAmount"?: string }`; `currency` 1–16 characters without control characters, `maxAmount` 1–32 characters matching `^[0-9]+(\.[0-9]+)?$` |
+| profile, registration file | `settlement` | string[]: settlement methods ([05-settlement.md](./05-settlement.md)), at most 10 |
+| profile, registration file | `accounts` | `[{ "network": CAIP-2, "address": string }]`: payment addresses, at most 10 |
+| intent | `maxPrice`, `currency` | strings (1–64 and 1–16 characters); both present or both absent |
+
+SDKs validate this object whenever the namespace is present (`invalid_profile` for profiles and registration files, `invalid_argument` for intents) and expose it as typed data; a relay treats it like any other extension (stored and served in canonical form, not indexed). No member of it confers authority or changes message processing.
 
 ### Social Messages
 
@@ -380,7 +415,6 @@ Schemas, enums and the same-account acceptance rules are in [09-principal.md](./
 
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
-| `type` | Yes | string | `"inline"` or `"reference"` |
 | `content` | No | string | Inline content (when type is `"inline"`) |
 | `contentType` | No | string | MIME type of the deliverable |
 | `uri` | No | string | URI to the deliverable (when type is `"reference"`) |
@@ -422,7 +456,6 @@ The `deliver` message intentionally does not prescribe how the deliverable is ho
 | `message` | No | string | Optional acceptance note or evaluation result |
 
 The `confirm` message signals that the buyer has accepted the delivered work. This is the normal success path and is essential for:
-- Future escrow release (Phase 2)
 - Reputation accumulation
 - Closing the business session
 
@@ -430,7 +463,7 @@ The `confirm` message signals that the buyer has accepted the delivered work. Th
 
 ### State Machine
 
-Economic messages follow a mandatory state machine per `(conversationId, threadId)` pair. The flow is a single-round linear sequence from negotiation through execution to completion.
+Applications that explicitly install the commerce profile apply its state machine per `(conversationId, threadId)` pair. The flow is a single-round linear sequence from negotiation through execution to completion.
 
 ```
     idle ──→ rfq ──→ offered ──→ rejected ■

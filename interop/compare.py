@@ -99,7 +99,7 @@ class Checker:
                         for k in ("aceId", "address", "scheme", "signingPublicKey", "encryptionPublicKey"):
                             self.expect(T, src, v, s, imp[k] == d[k], f"import {k}: {imp[k]!r} != {d[k]!r}")
                         self.expect(T, src, v, s, imp["reexport"] == d["export"], "re-export differs from export")
-                        self.expect(T, src, v, s, strip_none(imp["registrationFile"]) == strip_none(d["registrationFile"]),
+                        self.expect(T, src, v, s, {k: v for k, v in strip_none(imp["registrationFile"]).items() if k != "registrationSignature"} == {k: v for k, v in strip_none(d["registrationFile"]).items() if k != "registrationSignature"},
                                     f"createRegistrationFile differs: {imp['registrationFile']} vs {d['registrationFile']}")
                     rf = r["regFile"]
                     if self.ok(T, src, v, s, rf, "verifyRegistrationFile"):
@@ -140,13 +140,15 @@ class Checker:
                     if not self.expect(T, S, R, s, r is not None and "error" not in r, f"receiver failed: {r and r.get('error')}"):
                         continue
                     sid, rid = ids[(S, s)]["aceId"], rxs[(R, s)]["aceId"]
-                    for k, body, typ, tid in (("text", m1["textBody"], "text", None), ("rfq", m1["rfqBody"], "rfq", m1["threadId"])):
+                    for k, body, typ, tid in (("text", m1["textBody"], "text", None), ("rfq", m1["rfqBody"], "rfq", m1["threadId"]), ("custom", {"task": "你好"}, "urn:example:task:1", "private")):
                         p = r[k]
                         if self.ok(T, S, R, s, p, f"parse {k}"):
                             self.expect(T, S, R, s, p["body"] == body, f"{k} body differs: {p['body']} vs {body}")
                             self.expect(T, S, R, s, p["type"] == typ and p["threadId"] == tid, f"{k} type/threadId mismatch")
                             self.expect(T, S, R, s, p["from"] == sid and p["to"] == rid, f"{k} from/to mismatch")
                             self.expect(T, S, R, s, p["messageId"] == m1[k]["messageId"], f"{k} messageId mismatch")
+                    self.expect(T, S, R, s, r["custom"].get("schemaDigest") == "ab" * 32, "custom schema pin differs")
+                    self.expect(T, S, R, s, not ({"type", "body", "threadId", "schemaDigest"} & m1["custom"].keys()), "application header leaked")
                     for k in ("tamperedText", "tamperedRfq"):
                         c = r[k].get("code") if r[k].get("ok") is False else "<accepted>"
                         tampered_codes.setdefault(key, set()).add(c)
@@ -222,7 +224,7 @@ class Checker:
 
     def principal_records(self) -> None:
         T = "6 principal records"
-        roles = {"delegate": ("", ["agent"]), "controller": ("-rx", ["controller"])}
+        roles = {"delegate": ("", ["delegate"]), "controller": ("-rx", ["controller"])}
         outs = {v: load(self.w, f"out/{v}/pverify.json") or {} for v in LANGS}
         fixed = {(lang, s): load(self.w, f"fixed/{lang}-{s}.json") for lang in LANGS for s in SCHEMES}
         same: dict[tuple, dict[str, Any]] = {}  # (src, s, what) -> verifier -> value
@@ -302,7 +304,7 @@ class Checker:
                                         f"{k} handed differently: {p}")
                             self.expect(T, S, R, s, p.get("from") == sid and p.get("to") == rid and p.get("threadId") is None,
                                         f"{k} from/to/threadId: {p}")
-                    self.code(T, S, R, s, r["noContext"], "wrong_principal", "report parsed without a receiver principal")
+                    self.ok(T, S, R, s, r["noContext"], "report parsed as data without an installed principal policy")
                     # the delegate's Inbox
                     p2 = load(self.w, f"msgs/p2/{R}-{S}-{s}.json")
                     q = pd[S].get(f"{R}-{S}-{s}")

@@ -10,7 +10,7 @@ X-Wing (X25519 + ML-KEM-768)  →  HKDF-SHA256  →  AES-256-GCM
 
 X-Wing is the hybrid KEM specified in `draft-connolly-cfrg-xwing-kem` (ML-KEM-768 per FIPS 203 combined with X25519 per RFC 7748). An attacker must break **both** X25519 and ML-KEM-768 to recover a message key. This protects recorded traffic against future quantum computers ("harvest now, decrypt later"), which is the one attack on an encryption scheme that cannot be fixed later by rotating keys.
 
-ACE defines exactly one suite. Using a hybrid KEM does not make this protocol equivalent to an MLS or Signal session protocol.
+ACE defines exactly one suite. Using a hybrid KEM does not make this protocol equivalent to an MLS or Signal session protocol. On the network, every secure-delivery frame is such a packet; the application envelope additionally travels inside a fresh classical MLS group ([13-session-core.md](./13-session-core.md)), which supplies forward secrecy for past deliveries but not post-quantum forward secrecy.
 
 ## Encryption Flow
 

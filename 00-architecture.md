@@ -37,7 +37,7 @@ After ephemeral state erasure, later theft of static identity/encryption keys al
 
 ## Resource-scoped authorization
 
-[Exact-intent capabilities](./10-resource-grants.md) bind issuer, subject, executor/audience, resource, actions, typed constraints, validity interval, grant ID, policy epoch and bounded parent chain. Verification begins at a locally configured authority; every delegation must narrow rights. Unknown critical constraints fail closed. All three SDKs share validation and adversarial vectors.
+[Exact-intent capabilities](./10-resource-grants.md) bind issuer, subject, executor/audience, resource, the digest of one exact intent, validity interval, grant ID, policy epoch and bounded parent chain. They are not an extensible policy language: standing allowances stay in the resource authority's installed policy, which issues exact grants. Verification begins at a locally configured authority; every delegation must narrow validity and depth and cannot change the effect. Unknown fields fail closed. All three SDKs share validation and adversarial vectors.
 
 An effect requires a typed immutable intent and a valid grant. The intent binds the actual executor and effect, absolute deadline and permanent operation ID. Human approval binds the same canonical digest. Re-signing transport cannot extend a request deadline or change an already-bound intent.
 

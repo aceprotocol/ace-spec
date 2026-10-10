@@ -284,16 +284,16 @@ Peer bindings are cached and pinned under [02-discovery.md](./02-discovery.md) �
 | Threat | Notes |
 |--------|-------|
 | Endpoint availability (DDoS) | Transport-level concern, not protocol-level |
-| Malicious agent behavior | Handled by reputation (ERC-8004) and settlement mechanisms |
+| Malicious agent behavior | Bounded by explicit peer admission, exact-intent resource grants and application policy; reputation is an optional extension draft ([07-reputation.md](./07-reputation.md)) |
 | Recipient encryption key compromise | Exposes the static control frames to that key until rotated via a new binding. Application deliveries run over fresh MLS groups ([13-session-core.md](./13-session-core.md)) and are not exposed by a later static-key compromise once ephemeral state is erased. |
 | Quantum forgery of classical signatures | Not retroactive; see § Post-Quantum Posture |
 | Side-channel attacks on encryption | Implementation concern, not protocol-level |
 
 ## Post-Quantum Posture
 
-| Layer | ACE 1.0 | Rationale |
+| Layer | Current | Rationale |
 |-------|---------|-----------|
-| Message encryption | **Hybrid post-quantum** — X-Wing (X25519 + ML-KEM-768), see [03-encryption.md](./03-encryption.md) | Recorded ciphertext can be decrypted later by a quantum computer; this cannot be fixed by rotating keys after the fact |
+| Message encryption | **Hybrid post-quantum** outer layer — every network frame is X-Wing (X25519 + ML-KEM-768) encrypted, see [03-encryption.md](./03-encryption.md); application deliveries additionally run inside a fresh classical MLS group ([13-session-core.md](./13-session-core.md)) | Recorded ciphertext can be decrypted later by a quantum computer; this cannot be fixed by rotating keys after the fact |
 | Message authentication | Classical — `ed25519`, `secp256k1` | A signature is only ever checked at receipt time; there is no retroactive attack. Keeping classical keys keeps the ACE identity equal to the agent's chain key |
 | Reserved | `ml-dsa-65` (FIPS 204), see [signing-schemes/ml-dsa-65.md](./signing-schemes/ml-dsa-65.md) | Promoted when a supported chain exposes a post-quantum signature precompile or when classical signatures are deprecated for the deployment |
 

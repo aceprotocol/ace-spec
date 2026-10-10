@@ -207,6 +207,7 @@ The complete list. A signature produced under one action MUST NOT verify under a
 | `webhook` | `PUT` / `GET` / `DELETE /v1/webhook` ([08-relay.md](./08-relay.md) § Webhooks) | `encodePayload(method, urlOrEmpty, secretOrEmpty)` |
 | `grant` | Exact-intent resource capability ([10-resource-grants.md](./10-resource-grants.md)) | `encodePayload(claimsDigest)` |
 | `audit` | Signed log checkpoint ([11-audit.md](./11-audit.md)) | `encodePayload(logId, decimal(size), rootBytes)` |
+| `audit-witness` | Witness observation of a checkpoint ([11-audit.md](./11-audit.md)) | `encodePayload(logId, operator, rawCheckpointDigestBytes)` |
 | `principal` | Principal attestation ([09-principal.md](./09-principal.md)) | `encodePayload(account, join(roles, ","), signer.scheme, signer.publicKey, subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAt))` |
 
 - For `packet`, `aceId` is `from` and `timestamp` is the envelope `timestamp`. `kemCiphertextBytes` and `payloadBytes` are the decoded bytes.

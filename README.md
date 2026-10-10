@@ -1,6 +1,6 @@
 # ACE Protocol Specification
 
-An open protocol for agent identity, private communication and verifiable authorization.
+ACE (Agent Commerce Engine) is an open protocol for agent identity, private communication and verifiable authorization: the trust layer that agents need before they can work, trade and pay together.
 
 ## Version
 

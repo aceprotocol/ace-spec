@@ -162,7 +162,7 @@ before the next begins:
 1. Write the delivery record (the parsed message and the resulting thread snapshot). This is
    the commit point: a failure here leaves no trace and the message is retried. The record
    also journals the message's seen-store commit (step 3).
-1a. If the message is a `decision`, update the referenced `requests/` record (`decision` filled); if it is a `request`, nothing (requests are written by the sender).
+1a. If the message is a `decision`, update the referenced `requests/` record (`decision` filled); if it is a `request`, nothing (requests are written by the sender). Recovery repeats this step only for a `decision` that passes [09-principal.md](./09-principal.md) § Same-Account Rules at the replayed processing; any other record changes nothing.
 2. Write the thread state.
 3. Commit the message to the seen store. The replay state MAY be written lazily: the delivery
    records written since its last write journal the commits it does not hold yet.

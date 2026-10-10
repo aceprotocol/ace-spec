@@ -53,6 +53,11 @@ def strip_none(v: Any) -> Any:
     return v
 
 
+def without(d: dict, key: str) -> dict:
+    """d with None members and key removed (compare everything but a hedged signature)."""
+    return {k: x for k, x in strip_none(d).items() if k != key}
+
+
 class Checker:
     def __init__(self, w: str) -> None:
         self.w = w
@@ -99,7 +104,7 @@ class Checker:
                         for k in ("aceId", "address", "scheme", "signingPublicKey", "encryptionPublicKey"):
                             self.expect(T, src, v, s, imp[k] == d[k], f"import {k}: {imp[k]!r} != {d[k]!r}")
                         self.expect(T, src, v, s, imp["reexport"] == d["export"], "re-export differs from export")
-                        self.expect(T, src, v, s, {k: v for k, v in strip_none(imp["registrationFile"]).items() if k != "registrationSignature"} == {k: v for k, v in strip_none(d["registrationFile"]).items() if k != "registrationSignature"},
+                        self.expect(T, src, v, s, without(imp["registrationFile"], "registrationSignature") == without(d["registrationFile"], "registrationSignature"),
                                     f"createRegistrationFile differs: {imp['registrationFile']} vs {d['registrationFile']}")
                     rf = r["regFile"]
                     if self.ok(T, src, v, s, rf, "verifyRegistrationFile"):
@@ -258,7 +263,7 @@ class Checker:
                     fc, fv = fixed[(src, s)], fixed[(v, s)]
                     if not self.expect(T, src, v, s, fc is not None and fv is not None, "missing fixed record"):
                         continue
-                    unsigned = [{k: x for k, x in strip_none(f["record"]).items() if k != "signature"} for f in (fc, fv)]
+                    unsigned = [without(f["record"], "signature") for f in (fc, fv)]
                     self.expect(T, src, v, s, unsigned[0] == unsigned[1],
                                 f"fixed record differs between {src} and {v}: {fc['record']} vs {fv['record']}")
                     for h in ("payloadHex", "signDataHex"):

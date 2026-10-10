@@ -75,6 +75,6 @@ Apache-2.0
 
 ## Execution and optional audit
 
-[Resource grants](./10-resource-grants.md) bind one exact intent to a resource and executor, with bounded delegation, policy epochs and revocation. All three SDKs share verification vectors. The TypeScript and Swift authorities atomically reserve budget and permanent operation IDs; deployment must route all consumers of a resource to that same authoritative state. SoulPass adapters and its private ACE CLI service use this boundary with local or pinned etcd storage. No service has been deployed by this implementation.
+[Resource grants](./10-resource-grants.md) bind one exact intent to a resource and executor, with bounded delegation, policy epochs and revocation. All three SDKs share verification vectors. The TypeScript and Swift authorities atomically reserve budget and permanent operation IDs; deployment must route all consumers of a resource to that same authoritative state. SoulPass adapters and its private ACE CLI service use this boundary with local or pinned etcd storage.
 
 [Optional audit](./11-audit.md) provides private salted commitments, Merkle inclusion and consistency proofs, and signed checkpoints. It does not publish anything automatically or replace authorization.

@@ -53,14 +53,14 @@ The record is signed under action `principal` ([04-messages.md](./04-messages.md
 ```
 signData = buildSignData("principal", subjectAceId, issuedAt,
   encodePayload(account, join(roles, ","), signer.scheme, signer.publicKey,
-                subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAtOr0)))
+                subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAt)))
 ```
 
 - The **subject** is the ACE identity the record authorizes. `subjectAceId` is `ace:sha256:hex(SHA-256(subjectSigningPublicKey))`.
 - `subjectSigningPublicKeyB64` is the canonical Base64 of the subject's raw signing public key bytes (32 bytes for ed25519, the 33-byte compressed point for secp256k1, [01-identity.md](./01-identity.md) § Validation rule 3), computed by the verifier from the key it has verified (the relay request's `signingPublicKey`, the peer record's signing key, or the key determined by [01-identity.md](./01-identity.md) § Validation rule 3). It is never copied from the record.
 - `signer.publicKey` is used exactly as it appears in the record.
 - `join(roles, ",")` is the roles array joined with `,` (for example `controller,delegate`).
-- `scopeOrEmpty` is `scope`, or the empty string when absent. `decimal(expiresAtOr0)` is `decimal(expiresAt)` (0 never occurs for a valid record; the encoding is kept for payload stability).
+- `scopeOrEmpty` is `scope`, or the empty string when absent.
 - The digest is signed by the `signer` key. This is the only signing context whose signer is not the holder of `aceId`.
 - Signers MAY produce hedged (non-deterministic) signatures. Conformance compares every member of a produced record except `signature` byte-for-byte, and verifies `signature`.
 
@@ -135,16 +135,11 @@ A principal message is accepted only if, in this order (first failure wins):
 
 ## Persistence
 
-SDKs keep one record per sent `request` ([06-security.md](./06-security.md) § Appendix A):
-
-`requests/<sha256(conversationId ‖ 0x00 ‖ messageId)>.json` = `{"conversationId","decision":null|{"messageId","outcome","timestamp"},"expiresAt":null|int,"messageId","sentAt","to","version":1}`
+SDKs keep one `requests/` record per sent `request`; its format, `sentAt` and retention are defined in [06-security.md](./06-security.md) § Appendix A, and the write-before-transport rule in [06-security.md](./06-security.md) § Sender.
 
 - `expiresAt` is the request envelope `timestamp` + `ttl`, null when `ttl` is absent.
-- `sentAt` is the sender's local clock (Unix seconds, wire integer) when it writes the record before transport; it is not the envelope `timestamp`.
 - `to` is the ACE ID the request was sent to; it is consulted when a `decision` arrives (§ Same-Account Rules step 7).
-- The sender writes it before invoking transport. Write failure prevents sending; transport failure retains the record because the request may already have reached its recipient.
 - The receiver of the `decision` fills `decision` when it accepts the decision, right after the delivery record. Recovery repairs it from delivery records as a replayed processing: § Same-Account Rules run again on the pinned sender at that time, and a record that fails them (for example a `decision` delivered as plain data while no principal was installed, or one for an already decided request) changes nothing.
-- A record MAY be deleted 30 days after `sentAt`.
 
 ## Errors
 
@@ -163,6 +158,6 @@ A relay answers `invalid_principal` with status 400 ([08-relay.md](./08-relay.md
 - **Withdrawal and revocation.** A record binds only the subject's signing key; it carries no registration timestamp. So (a) a compromised subject holding the key can re-register an unexpired record, and (b) a relay, which does not cover the profile with the binding signature, can re-attach a withdrawn but unexpired record. Re-registering without the principal therefore withdraws it only against honest relays; for a compromised subject, `expiresAt` is the only protocol-level revocation, which is why it is required and bounded. A receiver that has adopted a newer principal rejects older records under its persistent principal horizon, including after profile omission, expiry or key rotation. Re-issuing a principal still cannot revoke the earlier record at receivers that have never observed the update. The protocol has no immediate revocation: before `expiresAt`, a receiver stops honouring the earlier record only if its host removes the signer from its trusted-signer set or `selfSigner`, or applies the on-chain check below; controllers that need fast revocation keep `expiresAt` short. Verifiers MAY additionally check on-chain that `signer.publicKey` is still an authority of `account` and treat loss of authority as revocation.
 - **Account strings are not self-certifying.** A principal record can name any `account`; without the signer-binding step above, any key could mint a record claiming to belong to a victim's account and pass the same-account rule. The binding step is therefore mandatory and the trusted-signer set MUST only contain keys the host has verified to control the account.
 - **Unsupported actions.** A controller MUST reject approval when it cannot completely interpret the action and all execution-relevant constraints. User presence alone is not authorization for an unknown action. Receiving a valid message does not authorize a side effect.
-- **Approval spoofing.** `summary`, `amount` and `currency` of a `request` are delegate-asserted display fields. A controller MUST present, and approve against, what it will actually execute (`details`); it MUST NOT treat `summary`/`amount` as authoritative when they disagree with `details`.
-- **Key custody.** `hardwareBacking` is self-asserted and not verifiable ([01-identity.md](./01-identity.md)); the principal binding is the verifiable delegation fact. Custody (`hardwareBacking`) remains self-asserted.
+- **Approval spoofing.** `summary`, `amount` and `currency` of a `request` are delegate-asserted display fields; a controller approves against `details` (§ Principal Messages).
+- **Key custody.** `hardwareBacking` is self-asserted and not verifiable ([01-identity.md](./01-identity.md)); the principal binding is the verifiable delegation fact.
 - **Authority.** The protocol proves that `signer` signed; whether `signer` controls `account` is established by the mandatory signer-binding step (§ Same-Account Rules step 4). Reading the chain is a MAY, as a means of populating the trusted-signer set.

@@ -441,14 +441,27 @@ final class Handed: @unchecked Sendable {
     func get(_ id: String) -> Any { lock.lock(); defer { lock.unlock() }; return m[id] ?? NSNull() }
 }
 
-/// A `requests/` record as loaded (`NSNull` when absent).
-func ledgerJSON(_ r: RequestRecord?) -> Any {
-    guard let r else { return NSNull() }
+/// The `requests/` record of `req` as loaded from `store` (`NSNull` when absent).
+func ledgerJSON(_ store: FileStore, _ req: [String: Any]) throws -> Any {
+    guard let r = try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
+                                        messageId: req["messageId"] as! String) else { return NSNull() }
     let decision: Any = r.decision.map { ["messageId": $0.messageId, "outcome": $0.outcome, "timestamp": $0.timestamp] as [String: Any] } ?? NSNull()
     return ["conversationId": r.conversationId, "messageId": r.messageId, "to": r.to, "sentAt": r.sentAt,
             "expiresAt": r.expiresAt as Any? ?? NSNull(), "decision": decision] as [String: Any]
 }
 func message(_ v: Any, _ k: String) -> [String: Any] { (v as! [String: Any])[k] as! [String: Any] }
+
+/// An Inbox on `pstores/<storeName>` with each pinned id file's principal pinned and the shared principal installed.
+func openPrincipalInbox(_ me: SoftwareIdentity, _ storeName: String, _ pins: [[String: Any]], _ s: SigningScheme,
+                        _ handed: Handed) async throws -> (FileStore, Inbox) {
+    let store = try FileStore(directory: url("pstores/\(storeName)"))
+    let peers = try PeerStore(store: store)
+    for pin in pins {
+        _ = try await peers.pinRegistrationFile(RegistrationFile(json: data(pin["registrationFilePrincipal"]!)))
+    }
+    return (store, try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { handed.put($0) },
+                                        principal: inboxPrincipal(s)))
+}
 
 func pverify() throws {
     var out: [String: Any] = [:]
@@ -513,9 +526,7 @@ func psend() async throws {
                 }
                 let request = try await send(.request, REQ)
                 let report = try await send(.report, REP)
-                let req = request as! [String: Any]
-                out[key] = ["ledger": ledgerJSON(try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
-                                                                       messageId: req["messageId"] as! String))]
+                out[key] = ["ledger": try ledgerJSON(store, request as! [String: Any])]
                 try wr("msgs/p1/\(key).json", ["requestBody": try anyJSON(REQ), "reportBody": try anyJSON(REP),
                                                "request": request, "report": report])
             } catch {
@@ -535,12 +546,7 @@ func precv() async throws {
         let handed = Handed()
         do {
             me = try identity(LANG, s, rx: true)
-            let store = try FileStore(directory: url("pstores/\(LANG)-\(s.rawValue)-rx"))
-            let peers = try PeerStore(store: store)
-            for S in LANGS {
-                _ = try await peers.pinRegistrationFile(RegistrationFile(json: data(idFile(S, s)["registrationFilePrincipal"]!)))
-            }
-            inbox = try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { handed.put($0) }, principal: inboxPrincipal(s))
+            (_, inbox) = try await openPrincipalInbox(me, "\(LANG)-\(s.rawValue)-rx", try LANGS.map { try idFile($0, s) }, s, handed)
         } catch {
             for S in LANGS { out["\(S)-\(LANG)-\(s.rawValue)"] = ["error": fail(error)] }
             continue
@@ -585,13 +591,8 @@ func pdecide() async throws {
         let store: FileStore, inbox: Inbox
         let handed = Handed()
         do {
-            let me = try identity(LANG, s)
-            store = try FileStore(directory: url("pstores/\(LANG)-\(s.rawValue)"))
-            let peers = try PeerStore(store: store)
-            for R in LANGS {
-                _ = try await peers.pinRegistrationFile(RegistrationFile(json: data(idFile(R, s, rx: true)["registrationFilePrincipal"]!)))
-            }
-            inbox = try await Inbox.open(identity: me, store: store, peers: peers, onMessage: { handed.put($0) }, principal: inboxPrincipal(s))
+            (store, inbox) = try await openPrincipalInbox(try identity(LANG, s), "\(LANG)-\(s.rawValue)",
+                                                          try LANGS.map { try idFile($0, s, rx: true) }, s, handed)
         } catch {
             for R in LANGS { out["\(R)-\(LANG)-\(s.rawValue)"] = ["error": fail(error)] }
             continue
@@ -607,10 +608,7 @@ func pdecide() async throws {
                 }
                 r["decisionParsed"] = handed.get(message(m, "decision")["messageId"] as! String)
                 r["reportParsed"] = handed.get(message(m, "report")["messageId"] as! String)
-                r["ledger"] = attempt {
-                    ["record": ledgerJSON(try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
-                                                                messageId: req["messageId"] as! String))]
-                }
+                r["ledger"] = attempt { ["record": try ledgerJSON(store, req)] }
             } catch {
                 r["error"] = fail(error)
             }
@@ -630,8 +628,7 @@ func pload() throws {
             out[key] = attempt {
                 let req = message(try rd("msgs/p1/\(key).json"), "request")
                 let store = try FileStore(directory: url("pstores/\(S)-\(s.rawValue)"))
-                return ["record": ledgerJSON(try loadRequestRecord(store, conversationId: req["conversationId"] as! String,
-                                                                   messageId: req["messageId"] as! String))]
+                return ["record": try ledgerJSON(store, req)]
             }
         }
     }

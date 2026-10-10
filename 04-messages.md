@@ -207,12 +207,12 @@ The complete list. A signature produced under one action MUST NOT verify under a
 | `webhook` | `PUT` / `GET` / `DELETE /v1/webhook` ([08-relay.md](./08-relay.md) § Webhooks) | `encodePayload(method, urlOrEmpty, secretOrEmpty)` |
 | `grant` | Exact-intent resource capability ([10-resource-grants.md](./10-resource-grants.md)) | `encodePayload(claimsDigest)` |
 | `audit` | Signed log checkpoint ([11-audit.md](./11-audit.md)) | `encodePayload(logId, decimal(size), rootBytes)` |
-| `principal` | Principal attestation ([09-principal.md](./09-principal.md)) | `encodePayload(account, join(roles, ","), signer.scheme, signer.publicKey, subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAtOr0))` |
+| `principal` | Principal attestation ([09-principal.md](./09-principal.md)) | `encodePayload(account, join(roles, ","), signer.scheme, signer.publicKey, subjectSigningPublicKeyB64, scopeOrEmpty, decimal(expiresAt))` |
 
 - For `packet`, `aceId` is `from` and `timestamp` is the envelope `timestamp`. `kemCiphertextBytes` and `payloadBytes` are the decoded bytes.
 - For `register` and `register-request`, `aceId` and `timestamp` are the request's. `encryptionPublicKeyB64` and `signingPublicKeyB64` are the Base64 strings as sent.
 - For `listen`, `inbox`, `unregister`, `intent` and `webhook`, `aceId` and `timestamp` are the `X-ACE-Id` and `X-ACE-Timestamp` headers ([08-relay.md](./08-relay.md) § Authentication). `sinceOrDash` is the `since` value, or `-` when absent. `limit` is the effective limit. `tags` absent is the empty list. For `webhook`, `method` is the uppercase HTTP method as sent (`PUT`, `GET` or `DELETE`). For `GET` and `DELETE`, `urlOrEmpty` and `secretOrEmpty` are empty strings. For `PUT` they are the request body's `url` and `secret`.
-- For `principal`, `aceId` is the **subject's** ACE ID and `timestamp` is `issuedAt`; the signature is made by the record's `signer`, not by the holder of `aceId`. `subjectSigningPublicKeyB64` is computed by the verifier from the subject key it verified; `scopeOrEmpty` is empty when `scope` is absent; `decimal(expiresAtOr0)` is `decimal(expiresAt)` (0 never occurs for a valid record).
+- For `principal`, `aceId` is the **subject's** ACE ID and `timestamp` is `issuedAt`; the signature is made by the record's `signer`, not by the holder of `aceId`. `subjectSigningPublicKeyB64` is computed by the verifier from the subject key it verified; `scopeOrEmpty` is empty when `scope` is absent.
 
 `threadId` is inside the ciphertext covered by the packet signature. Economic thread identity is security-relevant: changing `threadId` changes the signed meaning of the message and MUST invalidate the signature.
 

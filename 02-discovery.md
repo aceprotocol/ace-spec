@@ -70,7 +70,7 @@ Only `replace` appends fields, in this order:
 2. `encodePayload(...tags)`, `encodePayload(...capabilities)` (missing arrays become empty; order is significant).
 3. `endpoint` (missing becomes empty).
 4. The canonical JSON of `ext` ([06-security.md](./06-security.md) § Appendix A form, UTF-8), or empty when absent.
-5. `present` if `principal` exists, otherwise `absent` (a `null` `principal` is absent); then `principal.account`, `join(principal.roles, ",")`, `principal.signer.scheme`, `principal.signer.publicKey`, `decimal(principal.issuedAt)`, `decimal(expiresAtOr0)` (`decimal(principal.expiresAt)`; 0 never occurs for a valid record), `principal.scope` (or empty), `principal.signature`. When `principal` is absent all eight of these are empty strings.
+5. `present` if `principal` exists, otherwise `absent` (a `null` `principal` is absent); then `principal.account`, `join(principal.roles, ",")`, `principal.signer.scheme`, `principal.signer.publicKey`, `decimal(principal.issuedAt)`, `decimal(principal.expiresAt)`, `principal.scope` (or empty), `principal.signature`. When `principal` is absent all eight of these are empty strings.
 
 A `replace` payload therefore always has 16 fields after `mode`.
 
@@ -78,7 +78,7 @@ All fields use the existing four-byte big-endian length prefix; there is no JSON
 serialization dependency. Unknown top-level profile fields are ignored and not stored. `ext` is validated by § Profile Fields and stored in the canonical form that the authorization signed. Implementations
 SHOULD use the SDK registration builder instead of implementing this encoding.
 
-A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`; a relay rejects an expired principal at registration, the expired-only exception in [09-principal.md](./09-principal.md) § Validation (Expired-only records) applies only to fetched records) before writing. The relay stores only the members of `principal` defined in 09 § Principal Record; a `null` optional member (`scope`) is dropped and unknown members are ignored and not stored; the record is served exactly in that stored shape. Identity,
+A relay MUST validate both signatures, the full profile and its `principal` ([09-principal.md](./09-principal.md) § Validation, subject = the request's `signingPublicKey`, failure `invalid_principal`; a relay rejects an expired principal at registration, the expired-only exception in [09-principal.md](./09-principal.md) § Validation (Expired-only records) applies only to fetched records) before writing. What the relay stores and serves is defined in [08-relay.md](./08-relay.md) § Registration. Identity,
 profile and discovery indexes MUST update atomically. A newer mutation requires a
 strictly greater signed timestamp; an equal timestamp is accepted only for the same
 canonical mutation (idempotent retry), and older requests are rejected with 409

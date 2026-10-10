@@ -174,16 +174,16 @@ def parse_fresh(env: dict, me: ace.SoftwareIdentity, peer: ace.VerifiedPeer) -> 
 
 def gen() -> None:
     for s in SCHEMES + [rx(x) for x in SCHEMES]:
-        idn = ace.SoftwareIdentity.generate(s.replace("-rx", ""))  # type: ignore[arg-type]
+        base = s.replace("-rx", "")
+        idn = ace.SoftwareIdentity.generate(base)  # type: ignore[arg-type]
         ts = now()
         auth = {k: {"headers": ace.create_auth_headers(idn, req, ts)} for k, req in AUTH.items()}
-        base = s.replace("-rx", "")
         principal = ace.create_principal_record(
             ace.PrincipalSigner.from_identity(owner(base)), subject_signing_public_key=idn.get_signing_public_key(),
             account=ACCOUNT, roles=["controller"] if s.endswith("-rx") else ["delegate"],
             expires_at=ts + 3600, issued_at=ts)
         wr(f"ids/{LANG}-{s}.json", {
-            "lang": LANG, "scheme": s.replace("-rx", ""), "export": idn.export_private_key(), "aceId": idn.get_ace_id(),
+            "lang": LANG, "scheme": base, "export": idn.export_private_key(), "aceId": idn.get_ace_id(),
             "address": idn.get_address(), "signingPublicKey": b64(idn.get_signing_public_key()),
             "encryptionPublicKey": b64(idn.get_encryption_public_key()),
             "registrationFile": ace.create_registration_file(idn, name=f"Agent {LANG} {s}", endpoint=f"https://{LANG}.example/ace").to_dict(),
@@ -441,9 +441,23 @@ def load() -> None:
 # --- 6, 7: principal ---------------------------------------------------------------------
 
 
-def ledger(rec: dict | None) -> dict | None:
-    """A ``requests/`` record as loaded (without the store ``version``)."""
+def ledger(store: ace.FileStore, req: dict) -> dict | None:
+    """The ``requests/`` record of ``req`` as loaded (without the store ``version``)."""
+    rec = load_request_record(store, req["conversationId"], req["messageId"])
     return None if rec is None else {k: v for k, v in rec.items() if k != "version"}
+
+
+def open_principal_inbox(me: ace.SoftwareIdentity, store_name: str, pin_ids: list[str], s: str):
+    """An Inbox on ``pstores/<store_name>`` with each ``ids/<pin>.json`` principal pinned and
+    the shared principal installed; returns ``(store, inbox, handed)``."""
+    store = ace.FileStore(P(f"pstores/{store_name}"))
+    peers = ace.PeerStore(store)
+    for pin in pin_ids:
+        peers.pin_registration_file(rd(f"ids/{pin}.json")["registrationFilePrincipal"])
+    handed: dict = {}
+    inbox = ace.Inbox.open(me, store, peers, lambda m: handed.__setitem__(m.message_id, summary(m)),
+                           principal=inbox_principal(s))
+    return store, inbox, handed
 
 
 def pverify() -> None:
@@ -503,7 +517,7 @@ def psend() -> None:
                 peer = principal_peer(R, rx(s))
                 req = outbox.deliver(outbox.stage(peer, "request", REQ).request_id, lambda m: m.to_dict())
                 rep = outbox.deliver(outbox.stage(peer, "report", REP).request_id, lambda m: m.to_dict())
-                out[key] = {"ledger": ledger(load_request_record(store, req["conversationId"], req["messageId"]))}
+                out[key] = {"ledger": ledger(store, req)}
                 wr(f"msgs/p1/{key}.json", {"requestBody": REQ, "reportBody": REP, "request": req, "report": rep})
             except Exception as e:  # noqa: BLE001
                 wr(f"msgs/p1/{key}.json", {"error": fail(e)})
@@ -519,13 +533,7 @@ def precv() -> None:
         keys = [f"{S}-{LANG}-{s}" for S in LANGS]
         try:
             me = identity(LANG, rx(s))
-            store = ace.FileStore(P(f"pstores/{LANG}-{rx(s)}"))
-            peers = ace.PeerStore(store)
-            for S in LANGS:
-                peers.pin_registration_file(rd(f"ids/{S}-{s}.json")["registrationFilePrincipal"])
-            handed: dict = {}
-            inbox = ace.Inbox.open(me, store, peers, lambda m: handed.__setitem__(m.message_id, summary(m)),
-                                   principal=inbox_principal(s))
+            _, inbox, handed = open_principal_inbox(me, f"{LANG}-{rx(s)}", [f"{S}-{s}" for S in LANGS], s)
         except Exception as e:  # noqa: BLE001
             for k in keys:
                 out[k] = {"error": fail(e)}
@@ -565,14 +573,8 @@ def pdecide() -> None:
     for s in SCHEMES:
         keys = [f"{R}-{LANG}-{s}" for R in LANGS]
         try:
-            me = identity(LANG, s)
-            store = ace.FileStore(P(f"pstores/{LANG}-{s}"))
-            peers = ace.PeerStore(store)
-            for R in LANGS:
-                peers.pin_registration_file(rd(f"ids/{R}-{rx(s)}.json")["registrationFilePrincipal"])
-            handed: dict = {}
-            inbox = ace.Inbox.open(me, store, peers, lambda m: handed.__setitem__(m.message_id, summary(m)),
-                                   principal=inbox_principal(s))
+            store, inbox, handed = open_principal_inbox(identity(LANG, s), f"{LANG}-{s}",
+                                                        [f"{R}-{rx(s)}" for R in LANGS], s)
         except Exception as e:  # noqa: BLE001
             for k in keys:
                 out[k] = {"error": fail(e)}
@@ -590,7 +592,7 @@ def pdecide() -> None:
                         r[k] = outcome(inbox.receive(wire(m[env])))
                     r["decisionParsed"] = handed.get(m["decision"]["messageId"])
                     r["reportParsed"] = handed.get(m["report"]["messageId"])
-                    r["ledger"] = attempt(lambda: {"record": ledger(load_request_record(store, req["conversationId"], req["messageId"]))})
+                    r["ledger"] = attempt(lambda: {"record": ledger(store, req)})
                 except Exception as e:  # noqa: BLE001
                     r["error"] = fail(e)
         finally:
@@ -607,7 +609,7 @@ def pload() -> None:
             try:
                 req = rd(f"msgs/p1/{key}.json")["request"]
                 store = ace.FileStore(P(f"pstores/{S}-{s}"))
-                out[key] = attempt(lambda: {"record": ledger(load_request_record(store, req["conversationId"], req["messageId"]))})
+                out[key] = attempt(lambda: {"record": ledger(store, req)})
             except Exception as e:  # noqa: BLE001
                 out[key] = fail(e)
     wr(f"out/{LANG}/pload.json", out)

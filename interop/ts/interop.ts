@@ -41,11 +41,11 @@ const AUTH: Record<string, any> = {
   listen: { action: 'listen', since: '-' },
   inbox: { action: 'inbox', since: '1700000000000-0', limit: 50 },
   unregister: { action: 'unregister' },
-  intent: { action: 'intent', need: 'Translate EN→FR', tags: ['nlp', 'fr'], ext: { 'urn:ace:commerce:1': { maxPrice: '10', currency: 'USDC' } }, ttl: 3600 },
+  intent: { action: 'intent', need: 'Translate EN→FR', tags: ['nlp', 'fr'], ext: { [ace.COMMERCE_EXT]: { maxPrice: '10', currency: 'USDC' } }, ttl: 3600 },
 };
 const profile = (lang: string) => ({
   name: `Agent ${lang} é`, description: 'interop / matrix', tags: ['interop', 'ace'],
-  capabilities: ['translate'], endpoint: `https://${lang}.example/ace`, ext: { 'urn:ace:commerce:1': { pricing: { currency: 'USDC', maxAmount: '10' } } },
+  capabilities: ['translate'], endpoint: `https://${lang}.example/ace`, ext: { [ace.COMMERCE_EXT]: { pricing: { currency: 'USDC', maxAmount: '10' } } },
 });
 const textBody = (s: string, r: string, sch: string) => ({ message: `hello ${s}→${r} (${sch}) héllo 世界 / "q" \\ ✓` });
 const RFQ = { need: 'Translate 500 words EN→FR', maxPrice: '10.50', currency: 'USDC', ttl: 3600 };
@@ -71,6 +71,19 @@ const owner = (s: string) => {
 const ownerKey = (s: string) => ({ scheme: s as any, publicKey: VECTORS.agents[OWNER_AGENT[s]].signingPublicKey as string });
 /** `Inbox.open` principal: the shared account, this scheme's owner key as `selfSigner`, the other one as trusted. */
 const inboxPrincipal = (s: string) => ({ account: ACCOUNT, selfSigner: ownerKey(s), trustedSigners: SCHEMES.filter((x) => x !== s).map(ownerKey) });
+
+/** An Inbox on `pstores/<storeName>` with each `ids/<pin>.json` principal pinned and the shared principal installed. */
+async function openPrincipalInbox(me: any, storeName: string, pins: string[], s: string) {
+  const store = new FileStore(P(`pstores/${storeName}`));
+  const peers = new ace.PeerStore({ store });
+  for (const pin of pins) await peers.pinRegistrationFile(rd(`ids/${pin}.json`).registrationFilePrincipal);
+  const handed = new Map<string, any>();
+  const inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
+  return { store, inbox, handed };
+}
+
+/** The `requests/` record of `req`, loaded from `store`. */
+const requestRecord = (store: any, req: any) => ace.loadRequestRecord(store, req.conversationId, req.messageId);
 const decisionBodies = (rid: string, conv: string): Record<string, any> => ({
   decisionBody: { requestId: rid, outcome: 'approve', result: { payload: 'signed ✓' } },
   decision2Body: { requestId: rid, outcome: 'deny', reason: 'changed my mind ✓' },
@@ -394,7 +407,7 @@ async function psend() {
           outbox.deliver((await outbox.stage({ recipient: peer, type, body })).requestId, async (env: any) => env);
         const request = await send('request', REQ);
         const report = await send('report', REP);
-        out[key] = { ledger: await ace.loadRequestRecord(store, request.conversationId, request.messageId) };
+        out[key] = { ledger: await requestRecord(store, request) };
         wr(`msgs/p1/${key}.json`, { requestBody: REQ, reportBody: REP, request, report });
       } catch (e) {
         wr(`msgs/p1/${key}.json`, { error: fail(e) });
@@ -409,14 +422,10 @@ async function psend() {
 async function precv() {
   const out: Record<string, any> = {};
   for (const s of SCHEMES) {
-    let me: any, inbox: any;
-    const handed = new Map<string, any>();
+    let me: any, inbox: any, handed: any;
     try {
       me = identity(LANG, rx(s));
-      const store = new FileStore(P(`pstores/${LANG}-${rx(s)}`));
-      const peers = new ace.PeerStore({ store });
-      for (const S of LANGS) await peers.pinRegistrationFile(rd(`ids/${S}-${s}.json`).registrationFilePrincipal);
-      inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
+      ({ inbox, handed } = await openPrincipalInbox(me, `${LANG}-${rx(s)}`, LANGS.map((S) => `${S}-${s}`), s));
     } catch (e) {
       for (const S of LANGS) out[`${S}-${LANG}-${s}`] = { error: fail(e) };
       continue;
@@ -458,14 +467,9 @@ async function precv() {
 async function pdecide() {
   const out: Record<string, any> = {};
   for (const s of SCHEMES) {
-    let store: any, inbox: any;
-    const handed = new Map<string, any>();
+    let store: any, inbox: any, handed: any;
     try {
-      const me = identity(LANG, s);
-      store = new FileStore(P(`pstores/${LANG}-${s}`));
-      const peers = new ace.PeerStore({ store });
-      for (const R of LANGS) await peers.pinRegistrationFile(rd(`ids/${R}-${rx(s)}.json`).registrationFilePrincipal);
-      inbox = await ace.Inbox.open({ commerce: true, identity: me, store, peers, principal: inboxPrincipal(s), onMessage: (m: any) => { handed.set(m.messageId, summary(m)); } });
+      ({ store, inbox, handed } = await openPrincipalInbox(identity(LANG, s), `${LANG}-${s}`, LANGS.map((R) => `${R}-${rx(s)}`), s));
     } catch (e) {
       for (const R of LANGS) out[`${R}-${LANG}-${s}`] = { error: fail(e) };
       continue;
@@ -483,7 +487,7 @@ async function pdecide() {
           }
           r.decisionParsed = handed.get(m.decision.messageId) ?? null;
           r.reportParsed = handed.get(m.report.messageId) ?? null;
-          r.ledger = await attempt(async () => ({ record: await ace.loadRequestRecord(store, req.conversationId, req.messageId) }));
+          r.ledger = await attempt(async () => ({ record: await requestRecord(store, req) }));
         } catch (e) {
           r.error = fail(e);
         }
@@ -502,7 +506,7 @@ async function pload() {
     const key = `${S}-${LANG}-${s}`;
     out[key] = await attempt(async () => {
       const req = rd(`msgs/p1/${key}.json`).request;
-      return { record: await ace.loadRequestRecord(new FileStore(P(`pstores/${S}-${s}`)), req.conversationId, req.messageId) };
+      return { record: await requestRecord(new FileStore(P(`pstores/${S}-${s}`)), req) };
     });
   }
   wr(`out/${LANG}/pload.json`, out);

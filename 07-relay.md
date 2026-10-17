@@ -20,6 +20,8 @@ Requests and responses are JSON (`Content-Type: application/json`) unless stated
 | `GET /v1/inbox?since&limit` | `inbox` | — | `{"messages":[{"streamId","packet"}],"cursor":string\|null}` |
 | `POST /v1/inbox/ack?through` | `inbox-ack` | — | `{"ok":true}` |
 | `GET /v1/listen?since` | `listen` | — | `text/event-stream` |
+| `PUT /v1/wake` | `wake` | `{gateway, token}` | `{"ok":true}` |
+| `DELETE /v1/wake` | `wake` | — | `{"ok":true}` |
 | `GET /health`, `GET /metrics` | — | — | operations |
 
 ## Authentication
@@ -63,7 +65,7 @@ Per-network budgets and allowances key on the request's **client network**: the 
 
 The relay writes identity and KEL atomically and reports `registered` (new), `idempotent`, `refreshed` (newer timestamp, same last event) or `rotated` (KEL extended or recovered). The stored bytes of registrations and descriptors are charged to the byte budget of the client network the identity registered from; a write exceeding it is `rate_limited`.
 
-`POST /v1/unregister` requires an authentication timestamp greater than the stored registration timestamp (`identity_conflict`). It deletes the queue, descriptor, handle and blocks and closes listen streams, atomically against concurrent registration. A relay running several instances MUST revoke that identity's listen streams on every instance, and a stream opened under an earlier registration MUST NOT deliver any frame after unregister or re-registration. The relay keeps the verified KEL of an unregistered identity for at least `OFFLINE_WINDOW_SECONDS`, and a re-registration within that period is checked against it as above; afterwards the relay MAY delete the KEL. It MUST keep, for as long as it accepts registrations, the identity's fixed-size horizon: the unregister barrier, the newest descriptor `issuedAt` and claims digest, the `seq` and hash of the KEL's last `icp` or `rot` event (the epoch start) and the `seq` and hash of its last event. Against a horizon whose KEL is deleted, a registration must contain the epoch start (`kel_conflict`) and then either contain the last event (an extension) or contain a `rot` after the epoch start, which only the holder of the committed next root can sign (its recovery, [01](01-identity.md#verifier-rules) rule 6); otherwise it is `stale_seq` when shorter than the retired KEL and `kel_conflict` when not; and its timestamp must exceed the barrier (`identity_conflict`). Once the KEL is deleted, the horizon accepts any candidate containing a `rot` after the epoch start, which is broader than the rule-6 reconciliation applied while the KEL is retained; both are safe because a `rot` requires the committed next root. The horizon's stored bytes are charged as above, permanently.
+`POST /v1/unregister` requires an authentication timestamp greater than the stored registration timestamp (`identity_conflict`). It deletes the queue, descriptor, handle, blocks and wake registration and closes listen streams, atomically against concurrent registration. A relay running several instances MUST revoke that identity's listen streams on every instance, and a stream opened under an earlier registration MUST NOT deliver any frame after unregister or re-registration. The relay keeps the verified KEL of an unregistered identity for at least `OFFLINE_WINDOW_SECONDS`, and a re-registration within that period is checked against it as above; afterwards the relay MAY delete the KEL. It MUST keep, for as long as it accepts registrations, the identity's fixed-size horizon: the unregister barrier, the newest descriptor `issuedAt` and claims digest, the `seq` and hash of the KEL's last `icp` or `rot` event (the epoch start) and the `seq` and hash of its last event. Against a horizon whose KEL is deleted, a registration must contain the epoch start (`kel_conflict`) and then either contain the last event (an extension) or contain a `rot` after the epoch start, which only the holder of the committed next root can sign (its recovery, [01](01-identity.md#verifier-rules) rule 6); otherwise it is `stale_seq` when shorter than the retired KEL and `kel_conflict` when not; and its timestamp must exceed the barrier (`identity_conflict`). Once the KEL is deleted, the horizon accepts any candidate containing a `rot` after the epoch start, which is broader than the rule-6 reconciliation applied while the KEL is retained; both are safe because a `rot` requires the committed next root. The horizon's stored bytes are charged as above, permanently.
 
 ## Descriptors
 
@@ -113,6 +115,18 @@ data: {"packet": <packet>}
 
 `event: drain` asks the client to reconnect; lines starting with `:` are heartbeats. Listening does not delete; entries are acknowledged with `POST /v1/inbox/ack`. A relay bounds concurrent streams per identity and globally, and MUST NOT bound them per IP address, because a hosted service serves many identities from one address.
 
+## Wake hints
+
+Optional: a relay that does not offer them answers both routes with `404 not_found`. A wake tells a gateway the recipient chose that its queue has entries, so that a suspended endpoint can be woken to fetch them; it carries no content, ACE ID or count. Endpoints MUST NOT depend on wakes: delivery is defined by [§ Inbox](#inbox) and [§ Listen](#listen) alone.
+
+`PUT /v1/wake` (action `wake`, payload `encodePayload(gateway, token)`) takes the closed `{gateway, token}` and replaces the caller's registration; `DELETE /v1/wake` (action `wake`, empty payload) removes it. Both are idempotent. `gateway` is a canonical relay URL ([02](02-encoding.md#relay-urls)) and `token` matches `^[A-Za-z0-9_-]{22,512}$` (`invalid_argument`). The gateway issues the token: an unguessable value (at least 128 random bits) that it maps to the devices to wake. A relay MAY accept only gateways its operator lists (`invalid_argument`). An identity has at most one registration; its stored bytes are charged as [§ Registration](#registration) states. Unregistering deletes it, and it expires `OFFLINE_WINDOW_SECONDS` after the identity's last authenticated `wake`, `inbox`, `inbox-ack` or `listen` request.
+
+**Arming.** Storing a registration arms it, and every authenticated `inbox`, `inbox-ack` or `listen` request of the identity re-arms it. When an entry is queued for an identity whose registration is armed and that has no open listen stream, the relay disarms it and sends one wake, so one wake covers every entry queued until the endpoint next fetches or acknowledges. A relay MAY defer a wake to keep a minimum interval between wakes of one identity; it defers it rather than dropping it.
+
+**Request.** A wake is `POST` to `gateway` with `Content-Type: application/json` and the body `{"token": <token>}`, nothing else. The relay sends it after answering the send that queued the entry, so whether a recipient has a registration MUST NOT change the response or timing of `POST /v1/send`. It applies the blocked-address policy of [§ Client rules](#client-rules) to the gateway host, connects only to a validated address, never follows redirects, bounds the request in time and retries it at most once. A `2xx` response is success; `404` or `410` means the gateway no longer knows the token, and the relay deletes the registration if it still holds that token; any other outcome is ignored.
+
+**Gateways.** The token is a bearer capability whose only power is to cause wakes. A gateway MAY also authenticate relays by arrangement with their operators (mutual TLS, source addresses); ACE defines no relay credential.
+
 ## Operations
 
 `GET /health` and `GET /metrics` are operator-defined.
@@ -136,7 +150,7 @@ Error bodies are `{"error": <code>, "message"?: string}`.
 | `not_registered` | 403 | Caller or publisher not registered here |
 | `not_permitted` | 403 | Missing, invalid or expired permit, unknown or non-public recipient on send, or blocked sender |
 | `unknown_peer` | 404 | Unknown, private, expired or unresolvable target |
-| `not_found` | 404 | No such route |
+| `not_found` | 404 | No such route, or wake hints not offered |
 | `replay` | 409 | Nonce already used |
 | `identity_conflict` | 409 | Registration or unregister ordering violated |
 | `future_seq` | 409 | `X-ACE-Seq` ahead of the registered KEL |

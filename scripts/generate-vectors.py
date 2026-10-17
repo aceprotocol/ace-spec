@@ -50,7 +50,7 @@ from ace.delegation import validate_erc8004
 from ace.identity import sign_claims
 from ace.kel import create_inception, create_rotation, create_signing_delegation, event_bytes
 from ace.packet import aead_key, check_window, packet_header, packet_sign_payload
-from ace.prekeys import _entry
+from ace.prekeys import _entry, _State
 from ace.relay import map_relay_response
 from ace.rules import MessageEvent
 from ace.store import MemoryStore
@@ -541,7 +541,7 @@ assert verify_signature(packet_message, "packet", base64.b64decode(det_packet["s
 
 def bob_vault():
     v = PrekeyVault()
-    v._current = _entry(bytes.fromhex(BOB_PREKEY_SEED), T0)  # test-only injection
+    v._state = _State(_entry(bytes.fromhex(BOB_PREKEY_SEED), T0), [])  # test-only injection
     return v
 
 
@@ -1464,7 +1464,7 @@ def receipt_of(out) -> str | None:
         return None
     p = decode_packet(out.receipt.packet)
     v = PrekeyVault()
-    v._current = _entry(bytes.fromhex(RECEIPT_SEEDS[p.to_id]), T0)
+    v._state = _State(_entry(bytes.fromhex(RECEIPT_SEEDS[p.to_id]), T0), [])
     content = decode_content(decrypt_packet(p, v, NOW))
     assert content["type"] == "ace:receipt:1"
     return content["body"]["outcome"]
@@ -1540,6 +1540,8 @@ AUTH_REQUESTS = [
     {"action": "block", "peer": alice.id, "blocked": True, "revision": 1},
     {"action": "block", "peer": alice.id, "blocked": False, "revision": 9007199254740991},
     {"action": "unregister"},
+    {"action": "wake", "gateway": "https://push.example/ace", "token": "dG9rZW4tMDEyMzQ1Njc4OWFi"},
+    {"action": "wake"},
 ]
 
 
@@ -1554,6 +1556,8 @@ def action_payload(r) -> bytes:
         return encode_payload(r["through"])
     if a == "block":
         return encode_payload(r["peer"], "block" if r["blocked"] else "unblock", str(r["revision"]))
+    if a == "wake" and "gateway" in r:
+        return encode_payload(r["gateway"], r["token"])
     return b""
 
 
@@ -1666,6 +1670,40 @@ REG_NEGATIVE = [
 ]
 for name, rq, aud, now_, code in REG_NEGATIVE:
     expect(f"registration {name}", lambda: relay_verify_registration(rq, aud, now_), code)
+WAKE_TOKEN = re.compile(r"[A-Za-z0-9_-]{22,512}")
+
+
+def wake_registration_ok(body) -> bool:
+    """07 § Wake hints: the closed {gateway, token}; gateway a canonical relay URL."""
+    return (isinstance(body, dict) and set(body) == {"gateway", "token"} and isinstance(body["gateway"], str)
+            and is_canonical_relay_url(body["gateway"], allow_loopback=False) and isinstance(body["token"], str)
+            and WAKE_TOKEN.fullmatch(body["token"]) is not None)
+
+
+_tok = "A" * 22
+WAKE_VALID = [
+    {"gateway": "https://push.example", "token": _tok},
+    {"gateway": "https://push.example/v1/ace-wake", "token": "aZ09_-" * 4},
+    {"gateway": "https://push.example:8443/w", "token": "x" * 512},
+]
+WAKE_INVALID = [
+    ("http gateway", {"gateway": "http://push.example", "token": _tok}),
+    ("gateway with a query", {"gateway": "https://push.example/w?k=1", "token": _tok}),
+    ("gateway with a trailing slash", {"gateway": "https://push.example/w/", "token": _tok}),
+    ("gateway with an uppercase host", {"gateway": "https://Push.example", "token": _tok}),
+    ("gateway with userinfo", {"gateway": "https://u@push.example", "token": _tok}),
+    ("token of 21 characters", {"gateway": "https://push.example", "token": "A" * 21}),
+    ("token of 513 characters", {"gateway": "https://push.example", "token": "A" * 513}),
+    ("token with base64 padding", {"gateway": "https://push.example", "token": _tok + "=="}),
+    ("token with '+'", {"gateway": "https://push.example", "token": _tok + "+"}),
+    ("extra member", {"gateway": "https://push.example", "token": _tok, "aceId": alice.id}),
+    ("missing token", {"gateway": "https://push.example"}),
+]
+for _b in WAKE_VALID:
+    assert wake_registration_ok(_b), _b
+for _n, _b in WAKE_INVALID:
+    assert not wake_registration_ok(_b), _n
+
 auth = {
     "rules": (
         "07 § Authentication. cases: the action payload (02 § Signing actions) of 'request' == payloadHex; "
@@ -1676,7 +1714,9 @@ auth = {
         "(checks in 07 order). registration: the RegistrationRequest verifies at clock 'now' for 'audience'; "
         "payloadHex = encodePayload(lastHashHex, audience); messageHex = M(aceId, timestamp, seq, payload); the "
         "idempotency digest is requestDigest = SHA-256(M); each 'negative' entry (request, audience, now) fails with its "
-        "'error' (07 § Registration steps 1-5)."
+        "'error' (07 § Registration steps 1-5). wake: each 'valid' body is a well-formed PUT /v1/wake request "
+        "{gateway, token} (07 § Wake hints) that a client sends; each 'invalid' body is refused before signing and by a "
+        "relay with invalid_argument. A wake request with no gateway is DELETE /v1/wake with an empty payload."
     ),
     "cases": auth_cases,
     "negative": auth_negative,
@@ -1685,6 +1725,7 @@ auth = {
                      "requestDigest": hashlib.sha256(REG_MESSAGE).hexdigest(),
                      "negative": [{"name": n, "request": rq, "audience": a_, "now": t_, "error": c}
                                   for n, rq, a_, t_, c in REG_NEGATIVE]},
+    "wake": {"valid": WAKE_VALID, "invalid": [{"name": n, "body": b, "error": "invalid_argument"} for n, b in WAKE_INVALID]},
 }
 
 # =============================================================================== relay error mapping (07 § Client rules)

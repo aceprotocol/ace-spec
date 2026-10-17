@@ -436,6 +436,75 @@ paths:
           "$ref": "#/components/responses/TooManyRequests"
         "500":
           "$ref": "#/components/responses/Error"
+  "/v1/wake":
+    put:
+      summary: Register or replace the caller's wake gateway and token (optional; 404 not_found when not offered)
+      x-ace-action: wake
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/WakeRegistration"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+    delete:
+      summary: Remove the caller's wake registration (optional; 404 not_found when not offered)
+      x-ace-action: wake
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
   "/health":
     get:
       summary: Liveness
@@ -1002,6 +1071,19 @@ components:
           "$ref": "#/components/schemas/Kel"
         descriptor:
           "$ref": "#/components/schemas/Descriptor"
+    WakeRegistration:
+      type: object
+      additionalProperties: false
+      required:
+        - gateway
+        - token
+      properties:
+        gateway:
+          "$ref": "#/components/schemas/RelayUrl"
+        token:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{22,512}$"
+          description: "Opaque gateway-issued token; the whole body of a wake is {\"token\": token}"
     InboxEntry:
       type: object
       required:

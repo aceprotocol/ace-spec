@@ -110,6 +110,7 @@ The complete list. `aceId` and `timestamp` are the inputs of `M`.
 | `inbox-ack` | `POST /v1/inbox/ack` | auth headers | `encodePayload(through)` | [07](07-relay.md#inbox) |
 | `block` | `POST /v1/blocks` | auth headers | `encodePayload(peer, blocked ? "block" : "unblock", decimal(revision))` | [07](07-relay.md#blocks) |
 | `unregister` | `POST /v1/unregister` | auth headers | empty | [07](07-relay.md#registration) |
+| `wake` | `PUT` / `DELETE /v1/wake` | auth headers | `encodePayload(gateway, token)`; empty for `DELETE` | [07](07-relay.md#wake-hints) |
 
 Header-authenticated actions sign `encodePayload(audience, nonce, actionPayload)`, where `actionPayload` is the payload above ([07](07-relay.md#authentication)); they are never signed directly.
 

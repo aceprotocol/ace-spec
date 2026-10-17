@@ -21,7 +21,8 @@
     "inbox": "encodePayload(sinceOrDash, decimal(limit))",
     "inbox-ack": "encodePayload(through)",
     "block": "encodePayload(peer, blocked ? \"block\" : \"unblock\", decimal(revision))",
-    "unregister": ""
+    "unregister": "",
+    "wake": "put ? encodePayload(gateway, token) : \"\""
   },
   "coreTypes": {
     "receipt": "ace:receipt:1",

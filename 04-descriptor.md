@@ -1,0 +1,100 @@
+# 04 — Descriptor
+
+An agent publishes a **PublishedAgent**: the closed object `{kel, descriptor}`, whose canonical JSON is at most `MAX_PUBLISHED_AGENT_BYTES`. `kel` is the agent's complete KEL ([01](01-identity.md)). The descriptor is self-asserted, signed and short-lived. It is the only discovery document in ACE.
+
+## Fields
+
+The descriptor is a closed object:
+
+| Field | Rule |
+|---|---|
+| `aceId` | The ACE ID of `kel` |
+| `issuedAt`, `expiresAt` | Wire integers: `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS`, `issuedAt < expiresAt`, `now < expiresAt`, `expiresAt - issuedAt <= MAX_DESCRIPTOR_LIFETIME` |
+| `relays` | 1–4 distinct canonical relay URLs ([02](02-encoding.md#relay-urls)) at which the agent is registered and reads its inbox |
+| `prekey` | `{id, publicKey}` ([§ Prekey](#prekey)) |
+| `profiles` | At most 32 `{id, digest}` with distinct `id`s: each enabled profile and its profile digest ([08](08-profiles.md#digests)). `ace:core:1` is always installed and MUST NOT be listed |
+| `visibility` | `private` or `public` ([§ Visibility and handles](#visibility-and-handles)) |
+| `handle` | Optional handle; only when `visibility` is `public` |
+| `card` | [§ Card](#card) |
+| `ext` | Optional; [§ Extensions](#extensions) |
+| `delegations` | Optional, 1–4 entries; [§ Delegations](#delegations) |
+| `erc8004` | Optional, 1–4 entries; [§ ERC-8004](#erc-8004) |
+| `signature` | Delegated signature, action `agent-descriptor`, with `aceId`, `timestamp = issuedAt` and payload `canonicalStateBytes(claims)` ([02](02-encoding.md#signing-actions)) |
+
+## Verification
+
+A verifier checks a PublishedAgent at one clock reading `now`, in this order; the first failure wins:
+
+1. Shape: the closed objects and field rules above, including `ext`, `delegations` and `erc8004` shapes (`invalid_authorization`).
+2. `kel` verifies and is usable at `now` ([01](01-identity.md#verifier-rules); `invalid_kel` / `invalid_signature`); `aceId` equals its ACE ID (`invalid_authorization`).
+3. The signature verifies as an operational signature of that KEL ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
+4. Each delegation entry verifies ([§ Delegations](#delegations)). An entry that fails only because it has expired is dropped from the verifier's view; any other failure is `invalid_authorization`.
+
+Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Directory, lookup and resolve results are always complete signed PublishedAgents; a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true.
+
+## Caching
+
+A cached descriptor is bound to the KEL states it was verified under. A client uses it, to encrypt or to report its contents (delegations included), only while it is unexpired, its `kel` ends at the last event of the subject's current pin, and every delegation entry whose issuer the client has pinned still verifies under that pin ([§ Delegations](#delegations)). Otherwise it is stale: the client refreshes it and, if the refresh fails, reports that failure; it MUST NOT fall back to the stale descriptor. A delivery permit is presented only to relays named by a cached descriptor whose `kel` still ends at the subject's current pin (an expired one is fine), and only a permit that verifies under the issuer's current pin: a permit signed by a superseded key is never presented. A descriptor signed under a superseded key may name attacker-chosen relays, so it is refreshed only with the anonymous public lookup at its relays and the client's home relay. A newly verified descriptor replaces the cached one regardless of `issuedAt` only when the subject's KEL advanced (the cached one's `kel` no longer ends at the current pin). Under the same KEL a newer `issuedAt` replaces it, an equal `issuedAt` requires identical claims, and an older one never replaces it, even when the cached one is expired or stale through a delegation issuer's pin (no rollback). When an older candidate is refused, the client returns the cached descriptor only if it is usable, else it fails with `stale_peer_binding`.
+
+## Prekey
+
+`prekey.publicKey` is the canonical Base64 of a 1216-byte X-Wing public key ([03](03-packet.md#x-wing)); `prekey.id` is the lowercase hex SHA-256 of those 1216 bytes. A verifier recomputes the ID.
+
+- An agent MAY rotate its prekey whenever it publishes a descriptor; the reference implementation rotates every 24 hours. Agents SHOULD NOT rotate more than `MAX_RETAINED_PREKEYS` times per `OFFLINE_WINDOW_SECONDS`.
+- When a prekey is superseded, the agent keeps its seed for `OFFLINE_WINDOW_SECONDS` after the moment of supersession, then deletes it. It keeps at most `MAX_RETAINED_PREKEYS` superseded seeds, deleting the oldest first.
+- A packet referencing a prekey the agent does not hold is rejected with `unknown_prekey` ([06](06-delivery.md#receive-pipeline)).
+- Prekey seeds are secrets protected like identity seeds: in a key store readable only by the owner (file mode 0600) or sealed by hardware where available.
+- A superseded prekey whose retention has ended MUST NOT open a packet, even when its seed has not been deleted yet. Implementations delete expired seeds whenever they open a packet or rotate, not only on publication.
+
+SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId)` and `prune(now)`.
+
+The forward-secrecy window is the retention period ([06](06-delivery.md#security-considerations)).
+
+## Visibility and handles
+
+- `public`: the agent appears in its relays' directory, can be looked up anonymously by ACE ID and handle, and accepts contact requests from strangers ([05](05-admission.md)).
+- `private`: the agent is absent from every public surface, even to someone who knows its ACE ID. Holders of a valid delivery permit it issued resolve its descriptor ([07](07-relay.md#descriptors)).
+
+A handle is written `@name@relay.example` and its descriptor member is the slug `name`. It belongs to the namespace of `relays[0]`, which allows one active identity per handle. A handle is a lease that ends when the descriptor expires, turns private or the identity unregisters; another identity may then acquire it. A client resolving a handle MUST verify public visibility, the matching handle and that `relays[0]` is the relay it queried. Contacts are saved by ACE ID; a handle changing owner MUST NOT silently redirect a saved contact.
+
+## Card
+
+`card` is a closed object; every member is optional:
+
+| Member | Rule |
+|---|---|
+| `name` | 1–64 characters, no U+0000–U+001F or U+007F |
+| `description` | At most 256 characters, no U+0000–U+001F or U+007F |
+| `image` | ACE HTTPS URL ([02](02-encoding.md#https-urls)) |
+| `tags` | At most 10 distinct strings matching `^[a-z0-9-]{1,32}$` |
+
+Card contents are untrusted self-assertions. The tag `hosted` is reserved: it declares that a service holds the agent's keys. A hosted runtime MUST include it and MUST NOT allow its removal. No other tag has protocol meaning.
+
+## Extensions
+
+`ext` is an object whose keys are profile IDs listed in `profiles`, whose values are JSON objects, and whose canonical JSON is at most `MAX_EXT_BYTES`. A profile defines its own `ext` value: an official profile's chapter states the schema, which every verifier enforces ([profiles/commerce.md](profiles/commerce.md#descriptor-extension)); a key for an official profile that defines no `ext` is invalid. Values for third-party profiles are opaque objects. No `ext` value confers authority.
+
+## Delegations
+
+A delegation entry is the closed object `{kel, credential}`. It states one edge between two identities: **the issuer declares that the subject acts on its behalf.** It grants no execution, payment or communication right. The issuer is called the controller and the subject the delegate; there is no role enumeration. The issuer revokes by not renewing.
+
+`credential` is the closed object:
+
+```
+{ issuer, subject, issuedAt, expiresAt, signature }
+```
+
+signed by the issuer with action `delegation`, `aceId = issuer`, `timestamp = issuedAt` and payload `canonicalStateBytes(claims)`. An entry is valid when, in order:
+
+1. `issuer != subject`, `subject` equals the descriptor's `aceId`, `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS`, `issuedAt < expiresAt`, `expiresAt - issuedAt <= MAX_DELEGATION_LIFETIME`, and issuers are distinct across entries;
+2. `kel` verifies and its ACE ID equals `issuer`; when the verifier has pinned the issuer, `kel` is reconciled with that pin under [01](01-identity.md#pinning) (a fork, or a carried prefix whose credential is signed by a superseded delegation, invalidates the entry) and the reconciled state is used from here on;
+3. the signature verifies as an operational signature of that state;
+4. `now < expiresAt` (otherwise the entry is expired and dropped).
+
+## ERC-8004
+
+An `erc8004` entry is the closed object `{agentRegistry, agentId}` binding the ACE identity to an ERC-8004 agent. `agentRegistry` is the CAIP-10 account of the registry (`^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$`, for example `eip155:8453:0x…`; any chain); `agentId` is the registry's chain-native agent identifier: when the registry's CAIP-2 namespace (the part of `agentRegistry` before the first `:`) is `eip155`, a decimal string matching `^(0|[1-9][0-9]{0,77})$` (the ERC-721 token ID); for any other namespace, 1–128 characters matching `^[A-Za-z0-9]{1,128}$` (for example a Solana base58 address). Entries are distinct.
+
+The binding holds only when both directions hold: the signed descriptor names the on-chain agent, and that agent's registration file (its `tokenURI`) contains a service entry `{"name": "ACE", "endpoint": "<aceId>"}`. A registration file confirms the binding exactly when it is a JSON object whose `services` array contains an object with `name` equal to `"ACE"` and `endpoint` equal to the ACE ID. Reading the chain and the `tokenURI` is the host's task; the core contains no chain client. ACE defines no chain signature format.
+
+SDK note: SDKs provide this check as the pure function `verifyErc8004Registration(registrationJson, aceId) -> bool`.

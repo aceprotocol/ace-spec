@@ -139,7 +139,7 @@ paths:
   "/v1/card":
     post:
       summary: "Publish the caller's card record"
-      description: "04 § Card record, 07 § Descriptors and cards. Authenticated by the card record signature; kel must equal the registered KEL; issuedAt must be newer than the stored record's (equal with identical claims is idempotent, else 409 stale_descriptor). Handles are set once: when the identity has a handle bound here, the record must carry home = this relay and exactly that handle (400 invalid_argument otherwise); else, when home is this relay, a named handle is bound permanently (409 handle_taken when bound to another identity; at most 8 bindings per client network per day, 429 rate_limited). Bindings survive unregister and are never reassigned."
+      description: "04 § Card record, 07 § Descriptors and cards. Authenticated by the card record signature; kel must equal the registered KEL; issuedAt must be newer than the stored record's (equal with identical claims is idempotent, else 409 stale_descriptor). Handles are set once: a record whose home is another relay claims nothing here (an existing binding stays); when home is this relay and the identity has a handle bound here, the record must carry exactly that handle (400 invalid_argument otherwise); else, when home is this relay, a named handle is bound permanently (409 handle_taken when bound to another identity or reserved by the relay's naming policy; at most 8 bindings per client network per day, 429 rate_limited). Bindings survive unregister and are never reassigned."
       x-ace-action: card-record
       requestBody:
         required: true
@@ -196,7 +196,7 @@ paths:
   "/v1/handles/{handle}":
     get:
       summary: Look up a handle
-      description: "The CardBundle of the identity whose active handle it is; an unbound handle, or one whose identity has no card record, is unknown_peer. Clients check that card.home is this relay and card.handle the queried handle."
+      description: "The CardBundle of the identity whose active handle it is; an unbound handle, or one whose identity has no card record or whose record's home is another relay, is unknown_peer. Clients check that card.home is this relay and card.handle the queried handle."
       parameters:
         - name: handle
           in: path

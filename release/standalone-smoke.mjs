@@ -48,7 +48,7 @@ try {
   const aliceId = aliceIdentity.getACEId();
   const openAlice = () => NetworkClient.open({
     identity: aliceIdentity, store: join(home, 'alice'), relay: relay('https://relay-a.test'), foreignRelay: relay,
-    profiles: ['text'], visibility: 'public', acceptProfiles: ['ace:text:1'],
+    profiles: ['text'], contact: 'open', listed: true, acceptProfiles: ['ace:text:1'],
     onMessage: (m) => { received.push(m.body.message); },
   });
   let alice = await openAlice();

@@ -43,7 +43,7 @@ async function genIdentity(dir: string, now: number) {
   writeFileSync(join(dir, VAULT_KEY), (await store.read(VAULT_KEY))!, { mode: 0o600 });
   const profiles = new ProfileSet(['text']);
   const agent = await createDescriptor(identity, {
-    relays: [RELAY], prekey: { id: pk.id, publicKey: pk.publicKey }, profiles: profiles.descriptors(), visibility: 'public', now,
+    relays: [RELAY], prekey: { id: pk.id, publicKey: pk.publicKey }, profiles: profiles.descriptors(), now,
   });
   writeJson(join(dir, 'identity.json'), identity.exportPrivateKey());
   writeJson(join(dir, 'agent.json'), agent);

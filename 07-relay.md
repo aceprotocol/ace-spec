@@ -74,8 +74,9 @@ The relay writes identity and KEL atomically and reports `registered` (new), `id
 
 `POST /v1/card` publishes a CardBundle, authenticated by its own signature. The relay verifies it ([04](04-descriptor.md#card-record)); requires its `kel` to equal the registered KEL (`not_registered`, `kel_conflict`); and requires `issuedAt` to be newer than the stored record's, or equal with identical canonical claims (idempotent), else `stale_descriptor`. Handles are set once ([04](04-descriptor.md#card-record)):
 
-- When a handle is bound to this identity here, the record MUST name this relay as `home` and carry exactly that handle; a record that omits it or carries another is `invalid_argument`.
-- Otherwise, when `home` is this relay's public URL and the record names a handle, the relay binds it: a handle bound to no identity is bound to this one, permanently; a handle bound to another identity is `handle_taken`. Binding is limited to `HANDLE_CLAIMS_PER_NETWORK_PER_DAY` per client network ([§ Client networks](#client-networks); `rate_limited`).
+- A record whose `home` is another relay claims nothing here; a handle already bound to the identity here stays bound.
+- When `home` is this relay's public URL and a handle is bound to this identity here, the record MUST carry exactly that handle; a record that omits it or carries another is `invalid_argument`.
+- Otherwise, when `home` is this relay's public URL and the record names a handle, the relay binds it: a handle bound to no identity is bound to this one, permanently; a handle bound to another identity is `handle_taken`. A relay MAY reserve handles under its naming policy; a reserved handle is `handle_taken`. Binding is limited to `HANDLE_CLAIMS_PER_NETWORK_PER_DAY` per client network ([§ Client networks](#client-networks); `rate_limited`).
 
 An identity therefore holds at most one handle, and a handle is never reassigned: a new identity can only claim a handle no identity has held. The record, the handle binding and their effects on directory and send change atomically. Handle bindings and card records do not expire; a card record is deleted only by unregister, and the handle binding survives it. The relay keeps the newest card record `issuedAt` and claims digest as long as it keeps the identity's KEL, so a deleted record cannot be replayed over a newer one. Its stored bytes are charged as [§ Registration](#registration) states.
 
@@ -83,7 +84,7 @@ An identity therefore holds at most one handle, and a handle is never reassigned
 |---|---|---|
 | `GET /v1/descriptor/{aceId}` | the unexpired PublishedAgent of a registered identity | `unknown_peer` |
 | `GET /v1/card/{aceId}` | the stored CardBundle of a registered identity | `unknown_peer` |
-| `GET /v1/handles/{handle}` | the stored CardBundle of the identity the handle is bound to | `unknown_peer` |
+| `GET /v1/handles/{handle}` | the stored CardBundle of the identity the handle is bound to, when that record's `home` is this relay | `unknown_peer` |
 
 A client resolving a handle checks the CardBundle as [04](04-descriptor.md#card-record) states (its `home` is this relay and its `handle` the one queried) and fails with `unknown_peer` otherwise.
 
@@ -159,14 +160,14 @@ Error bodies are `{"error": <code>, "message"?: string}`.
 | `stale_peer_binding` | 401 | Signed at or after the delegation's `notAfter`, or the signer's KEL is not usable at `now` |
 | `not_registered` | 403 | Caller or publisher not registered here |
 | `not_permitted` | 403 | Missing, invalid or expired permit, unknown or `closed` recipient on send, or blocked sender |
-| `unknown_peer` | 404 | Unknown or expired target, or a handle whose identity has no card record |
+| `unknown_peer` | 404 | Unknown or expired target, or a handle whose identity has no card record here naming this relay as `home` |
 | `not_found` | 404 | No such route, or wake hints not offered |
 | `replay` | 409 | Nonce already used |
 | `identity_conflict` | 409 | Registration or unregister ordering violated |
 | `future_seq` | 409 | `X-ACE-Seq` ahead of the registered KEL |
 | `kel_conflict` | 409 | KEL forks the stored one, or descriptor or card KEL differs from the registered KEL |
 | `stale_descriptor` | 409 | Descriptor or card record not newer than the stored one |
-| `handle_taken` | 409 | Handle bound to another identity |
+| `handle_taken` | 409 | Handle bound to another identity, or reserved by the relay |
 | `stale_revision` | 409 | Block revision not increasing |
 | `limit_exceeded` | 409 | Tracked-block cap reached |
 | `payload_too_large` | 413 | Body over its limit |

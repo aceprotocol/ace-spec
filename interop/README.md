@@ -110,7 +110,7 @@ of every SDK, and over tampered copies of each:
 |---|---|
 | `valid` | `{ok: true, aceId, handle?, contact: "open", listed: false}`, `aceId` that of the identity's `agent.json` and `handle` present exactly for `a` (the matrix also checks the generated record against the `gen-identity` contract) |
 | `tamper-signature` (a flipped byte of `signature.value`), `tamper-listed`, `tamper-contact` | the signature covers every claim: `invalid_authorization` |
-| `tamper-unknown-member` (`visibility` added) | the record is closed: `invalid_authorization` |
+| `tamper-unknown-member` (`x` added) | the record is closed: `invalid_authorization` |
 | `tamper-seq` | `signature.seq` names an unknown delegation: `stale_peer_binding` |
 
 ## Packet cases (per directed pair)

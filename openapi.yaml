@@ -139,7 +139,7 @@ paths:
   "/v1/card":
     post:
       summary: "Publish the caller's card record"
-      description: "04 § Card record, 07 § Descriptors and cards. Authenticated by the card record signature; kel must equal the registered KEL; issuedAt must be newer than the stored record's (equal with identical claims is idempotent, else 409 stale_descriptor). Handles are set once: a record whose home is another relay claims nothing here (an existing binding stays); when home is this relay and the identity has a handle bound here, the record must carry exactly that handle (400 invalid_argument otherwise); a relay whose public URL has a path binds no handle; else, when home is this relay, a named handle is bound permanently (409 handle_taken when bound to another identity or reserved by the relay's naming policy; at most 8 bindings per client network per day, 429 rate_limited). Bindings survive unregister and are never reassigned."
+      description: "04 § Card record, 07 § Descriptors and cards. Authenticated by the card record signature; kel must equal the registered KEL. 409 stale_descriptor for an older issuedAt, or an equal one with different claims; 400 invalid_argument for a record that changes or drops the handle bound here; 409 handle_taken for a handle bound to another identity or reserved; 429 rate_limited for too many handle claims."
       x-ace-action: card-record
       requestBody:
         required: true
@@ -196,7 +196,7 @@ paths:
   "/v1/handles/{handle}":
     get:
       summary: Look up a handle
-      description: "The CardBundle of the identity whose active handle it is; an unbound handle, or one whose identity has no card record or whose record's home is another relay, is unknown_peer. Clients check that card.home is this relay and card.handle the queried handle, and pin the handle's aceId on first resolution (a later different aceId is invalid_authorization)."
+      description: "07 § Descriptors and cards. The CardBundle of the identity the handle is bound to, when that record's home is this relay; otherwise unknown_peer. Clients check and pin the result as 04 § Card record states."
       parameters:
         - name: handle
           in: path
@@ -221,7 +221,7 @@ paths:
   "/v1/descriptors":
     get:
       summary: Public directory
-      description: "Unexpired PublishedAgents of identities whose stored card record is listed: true, names this relay as home and was published under the currently registered KEL, ordered by ACE ID."
+      description: "Unexpired PublishedAgents of identities whose stored card record is listed: true, names this relay as home, ordered by ACE ID (a record under a superseded KEL is absent)."
       parameters:
         - name: profile
           in: query

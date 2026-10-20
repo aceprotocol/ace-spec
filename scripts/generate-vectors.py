@@ -745,18 +745,29 @@ BASE = {
 }
 
 
-def published(claims, signer: Agent = alice, kel=None, resign_=True, seq=None):
-    if seq is not None:
-        c = {k: v for k, v in claims.items() if k != "signature"}
-        d = {**c, "signature": signer.raw_sign("agent-descriptor", c["issuedAt"], canonical_state_bytes(c), seq=seq)}
-    elif resign_:
-        c = {k: v for k, v in claims.items() if k != "signature"}
+def signed(action, claims, signer: Agent, seq=None):
+    """``claims`` signed under ``action`` (without signer-side checks when they would refuse, or under a forced ``seq``)."""
+    c = {k: v for k, v in claims.items() if k != "signature"}
+    if seq is None:
         try:
-            d = sign_claims(signer.identity, "agent-descriptor", c)
+            return sign_claims(signer.identity, action, c)
         except ACEError:
-            d = {**c, "signature": signer.raw_sign("agent-descriptor", c["issuedAt"], canonical_state_bytes(c))}
-    else:
-        d = claims
+            pass
+    return {**c, "signature": signer.raw_sign(action, c["issuedAt"], canonical_state_bytes(c), seq=seq)}
+
+
+def with_changes(base, changes):
+    out = copy.deepcopy(base)
+    for k, v in changes.items():
+        if v is DELETE:
+            out.pop(k, None)
+        else:
+            out[k] = v
+    return out
+
+
+def published(claims, signer: Agent = alice, kel=None, resign_=True, seq=None):
+    d = signed("agent-descriptor", claims, signer, seq) if resign_ or seq is not None else claims
     return {"kel": signer.kel if kel is None else kel, "descriptor": d}
 
 
@@ -791,13 +802,7 @@ def bad_desc(name, pa, code, now=NOW):
 
 
 def field(name, code="invalid_authorization", **changes):
-    claims = copy.deepcopy(BASE)
-    for k, v in changes.items():
-        if v is DELETE:
-            claims.pop(k, None)
-        else:
-            claims[k] = v
-    bad_desc(name, published(claims), code)
+    bad_desc(name, published(with_changes(BASE, changes)), code)
 
 
 IA = "invalid_authorization"
@@ -1037,16 +1042,7 @@ CARD_BASE = {
 
 
 def card_bundle(claims, signer: Agent = alice, kel=None, seq=None):
-    """A CardBundle over ``claims`` (signed by ``signer`` without signer-side checks when they would refuse)."""
-    c = {k: v for k, v in claims.items() if k != "signature"}
-    if seq is None:
-        try:
-            r = sign_claims(signer.identity, "card-record", c)
-        except ACEError:
-            r = {**c, "signature": signer.raw_sign("card-record", c["issuedAt"], canonical_state_bytes(c))}
-    else:
-        r = {**c, "signature": signer.raw_sign("card-record", c["issuedAt"], canonical_state_bytes(c), seq=seq)}
-    return {"kel": signer.kel if kel is None else kel, "card": r}
+    return {"kel": signer.kel if kel is None else kel, "card": signed("card-record", claims, signer, seq)}
 
 
 def card_summary(v) -> dict:
@@ -1073,13 +1069,7 @@ def bad_card(name, bundle, code, now=NOW):
 
 
 def card_field(name, code=IA, **changes):
-    claims = copy.deepcopy(CARD_BASE)
-    for k, v in changes.items():
-        if v is DELETE:
-            claims.pop(k, None)
-        else:
-            claims[k] = v
-    bad_card(name, card_bundle(claims), code)
+    bad_card(name, card_bundle(with_changes(CARD_BASE, changes)), code)
 
 
 good_card("alice: handle, home, pay, open, unlisted", BASE_CARD)
@@ -1088,15 +1078,10 @@ good_card("minimal: no handle, no pay, empty card, closed", card_bundle(
 good_card("no expiry: verifies a year later", BASE_CARD, now=NOW + 365 * 86400)
 good_card("issuedAt at now + 300", card_bundle({**CARD_BASE, "issuedAt": NOW + 300}))
 good_card("8 pay accounts", card_bundle({**CARD_BASE, "pay": [f"eip155:1:0x{i:040x}" for i in range(8)]}))
-good_card("home with a path and port", card_bundle({**CARD_BASE, "home": "https://relay.example:8443/ace"}))
-_sig = copy.deepcopy(BASE_CARD)
-_v = bytearray(base64.b64decode(_sig["card"]["signature"]["value"]))
-_v[0] ^= 1
-_sig["card"]["signature"]["value"] = b64(bytes(_v))
-bad_card("tampered signature value", _sig, IA)
-_tampered_card = copy.deepcopy(BASE_CARD)
-_tampered_card["card"]["listed"] = True
-bad_card("claims changed after signing", _tampered_card, IA)
+good_card("home with a path and port, no handle", card_bundle(
+    {k: v for k, v in CARD_BASE.items() if k != "handle"} | {"home": "https://relay.example:8443/ace"}))
+bad_card("tampered signature value", mutate(BASE_CARD, ["card", "signature", "value"], flip_b64(BASE_CARD["card"]["signature"]["value"], 0)), IA)
+bad_card("claims changed after signing", mutate(BASE_CARD, ["card", "listed"], True), IA)
 card_field("a version member (unknown in the closed object)", version=1)
 card_field("aceId of another identity", aceId=bob.id)
 card_field("no contact", contact=DELETE)
@@ -1104,15 +1089,14 @@ card_field("no card", card=DELETE)
 card_field("no home", home=DELETE)
 card_field("no listed", listed=DELETE)
 card_field("issuedAt beyond now + 300", issuedAt=NOW + 301)
-_frac = copy.deepcopy(BASE_CARD)
-_frac["card"]["issuedAt"] = NOW - 100.5
-bad_card("issuedAt not an integer", _frac, IA)
+bad_card("issuedAt not an integer", mutate(BASE_CARD, ["card", "issuedAt"], NOW - 100.5), IA)
 card_field("contact 'public'", contact="public")
 card_field("listed as a string", listed="false")
 card_field("home with a trailing slash", home=CARD_HOME + "/")
 card_field("home with an uppercase host", home="https://Relay.interop.test")
 card_field("home over http", home="http://relay.interop.test")
 card_field("loopback http home (development only)", home="http://127.0.0.1:8080")
+card_field("handle with a home that has a path", home="https://relay.example:8443/ace")
 card_field("handle grammar", handle="Al")
 card_field("handle of 33 characters", handle="a" * 33)
 card_field("9 pay accounts", pay=[f"eip155:1:0x{i:040x}" for i in range(9)])

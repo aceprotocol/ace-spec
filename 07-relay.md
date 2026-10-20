@@ -76,7 +76,7 @@ The relay writes identity and KEL atomically and reports `registered` (new), `id
 
 - A record whose `home` is another relay claims nothing here; a handle already bound to the identity here stays bound.
 - When `home` is this relay's public URL and a handle is bound to this identity here, the record MUST carry exactly that handle; a record that omits it or carries another is `invalid_argument`.
-- A relay whose public URL has a path binds no handle ([04](04-descriptor.md#card-record)); it accepts a record naming it as `home` with a `handle` and binds nothing.
+- A relay whose public URL has a path binds no handle: a record naming it as `home` carries none ([04](04-descriptor.md#card-record)).
 - Otherwise, when `home` is this relay's public URL and the record names a handle, the relay binds it: a handle bound to no identity is bound to this one, permanently; a handle bound to another identity is `handle_taken`. A relay MAY reserve handles under its naming policy; a reserved handle is `handle_taken`. Binding is limited to `HANDLE_CLAIMS_PER_NETWORK_PER_DAY` per client network ([§ Client networks](#client-networks); `rate_limited`).
 
 An identity therefore holds at most one handle, and a handle is never reassigned: a new identity can only claim a handle no identity has held. The record, the handle binding and their effects on directory and send change atomically. Handle bindings and card records do not expire; a card record is deleted only by unregister, and the handle binding survives it. The relay keeps the newest card record `issuedAt` and claims digest as long as it keeps the identity's KEL, so a deleted record cannot be replayed over a newer one. Its stored bytes are charged as [§ Registration](#registration) states.
@@ -87,11 +87,9 @@ An identity therefore holds at most one handle, and a handle is never reassigned
 | `GET /v1/card/{aceId}` | the stored CardBundle of a registered identity | `unknown_peer` |
 | `GET /v1/handles/{handle}` | the stored CardBundle of the identity the handle is bound to, when that record's `home` is this relay | `unknown_peer` |
 
-A relay treats a stored card record whose `kel` is not the identity's current registered KEL as absent.
+A relay treats a stored card record whose `kel` is not the identity's current registered KEL as absent. Clients check a resolved handle as [04](04-descriptor.md#card-record) states.
 
-A client resolving a handle checks the CardBundle as [04](04-descriptor.md#card-record) states (its `home` is this relay and its `handle` the one queried) and fails with `unknown_peer` otherwise.
-
-`GET /v1/descriptors` is the public directory: the unexpired PublishedAgents of identities whose stored card record is `listed: true`, has `home` equal to this relay's public URL and was published under the currently registered KEL, ordered by ACE ID, optionally only those listing the exact profile ID `profile`. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`.
+`GET /v1/descriptors` is the public directory: the unexpired PublishedAgents of identities whose stored card record is `listed: true`, has `home` equal to this relay's public URL, ordered by ACE ID, optionally only those listing the exact profile ID `profile`. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`.
 
 ## Blocks
 

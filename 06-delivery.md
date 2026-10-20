@@ -94,7 +94,7 @@ An SDK reports every failure as one error type carrying a `code`, whose category
 
 ## Security considerations
 
-**Post-quantum.** Every signature in ACE is ML-DSA (FIPS 204): KEL events, packets, descriptors, delegation credentials, permits, registration and relay authentication. Packet confidentiality uses X-Wing (ML-KEM-768 + X25519), which holds unless both components are broken, with HKDF-SHA256 and AES-256-GCM. Control of an identity rests on a hash commitment that includes the scheme, so if ML-DSA weakens, a later revision can add a scheme that owners adopt by committing a next root of that scheme at their next rotation ([02](02-encoding.md#signatures)).
+**Post-quantum.** Every signature in ACE is ML-DSA (FIPS 204): KEL events, packets, descriptors, card records, delegation credentials, permits, registration and relay authentication. Packet confidentiality uses X-Wing (ML-KEM-768 + X25519), which holds unless both components are broken, with HKDF-SHA256 and AES-256-GCM. Control of an identity rests on a hash commitment that includes the scheme, so if ML-DSA weakens, a later revision can add a scheme that owners adopt by committing a next root of that scheme at their next rotation ([02](02-encoding.md#signatures)).
 
 **Forward secrecy.** The window equals prekey retention: an attacker who captures packets and later steals a prekey seed reads the packets encrypted to it while the seed is retained, at most `OFFLINE_WINDOW_SECONDS` after its supersession plus its active life. Deleted seeds protect past packets. There is no per-message ratchet and no post-compromise security beyond prekey rotation; one-time prekeys are future work. Plaintext kept by endpoints, logs and backups is outside this guarantee.
 

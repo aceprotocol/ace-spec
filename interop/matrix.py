@@ -150,12 +150,11 @@ def run_pair(s: str, r: str) -> dict[str, str]:
 
 
 RELAY = "https://relay.interop.test"
-# Identities with a handle (the matrix names them "<lang>-a"); "b" and "c" publish no handle.
-HANDLED = ("a",)
 
 
 def handle_of(lang: str, who: str) -> str | None:
-    return f"{lang}-{who}" if who in HANDLED else None
+    """Only "a" publishes a handle ("<lang>-a"); "b" and "c" publish none."""
+    return f"{lang}-a" if who == "a" else None
 
 
 def card_cases(lang: str, who: str) -> list[tuple[str, Path, dict]]:
@@ -163,13 +162,10 @@ def card_cases(lang: str, who: str) -> list[tuple[str, Path, dict]]:
     d = WORK / lang / who
     card = read(d / "card.json")
     rec = card["card"]
-    expected = {"ok": True, "aceId": read(d / "agent.json")["descriptor"]["aceId"], "contact": "open", "listed": False}
-    if handle_of(lang, who):
-        expected["handle"] = handle_of(lang, who)
+    handle = {"handle": h} if (h := handle_of(lang, who)) else {}
+    expected = {"ok": True, "aceId": read(d / "agent.json")["descriptor"]["aceId"], "contact": "open", "listed": False, **handle}
     # The generated record itself must carry exactly what gen-identity was asked for.
-    want = {"home": RELAY, "card": {}, "contact": "open", "listed": False}
-    if handle_of(lang, who):
-        want["handle"] = handle_of(lang, who)
+    want = {"home": RELAY, "card": {}, "contact": "open", "listed": False, **handle}
     shape = {k: v for k, v in rec.items() if k not in ("aceId", "issuedAt", "signature")} == want and rec["issuedAt"] == NOW
     if not shape:
         expected = {"generated": "record does not match the gen-identity contract"}
@@ -179,36 +175,38 @@ def card_cases(lang: str, who: str) -> list[tuple[str, Path, dict]]:
         ("tamper-signature", lambda c: c["card"]["signature"].__setitem__("value", flip_b64(c["card"]["signature"]["value"], 10)), bad),
         ("tamper-listed", lambda c: c["card"].__setitem__("listed", True), bad),
         ("tamper-contact", lambda c: c["card"].__setitem__("contact", "closed"), bad),
-        ("tamper-unknown-member", lambda c: c["card"].__setitem__("visibility", "public"), bad),
+        ("tamper-unknown-member", lambda c: c["card"].__setitem__("x", 1), bad),
         ("tamper-seq", lambda c: c["card"]["signature"].__setitem__("seq", c["card"]["signature"]["seq"] + 1), "stale_peer_binding"),
     ]:
-        c = copy.deepcopy(card)
+        c = {**card, "card": copy.deepcopy(rec)}  # the KEL is never tampered: share it
         mutate(c)
         path = WORK / "cards" / f"{lang}-{who}.{name}.json"
-        path.parent.mkdir(exist_ok=True)
         write(path, c)
         cases.append((name, path, {"error": code}))
     return cases
 
 
-def run_cards(verifier: str, cases: list[tuple[str, str, str, Path, dict]]) -> dict[str, str]:
-    """Every card case verified by SDK ``verifier``: "<maker>-<who> <case>" -> "ok" or a failure."""
-    cells: dict[str, str] = {}
-    for maker, who, name, path, expected in cases:
-        key = f"{maker}-{who} {name}"
-        try:
-            got = json.loads(run(verifier, "verify-card", str(path)))
-        except (RuntimeError, ValueError) as exc:
-            cells[key] = f"FAIL {exc}"
-            continue
-        cells[key] = "ok" if got == expected else f"FAIL want {json.dumps(expected)}, got {json.dumps(got)[:200]}"
-    return cells
+def verify_card(verifier: str, path: Path, expected: dict) -> str:
+    """One card case verified by SDK ``verifier``: "ok" or a failure."""
+    try:
+        got = json.loads(run(verifier, "verify-card", str(path)))
+    except (RuntimeError, ValueError) as exc:
+        return f"FAIL {exc}"
+    return "ok" if got == expected else f"FAIL want {json.dumps(expected)}, got {json.dumps(got)[:200]}"
+
+
+def report(label: str, cells: dict[str, str]) -> int:
+    bad = {k: v for k, v in cells.items() if v != "ok"}
+    print(f"{label} {len(cells) - len(bad)}/{len(cells)} ok")
+    for k, v in bad.items():
+        print(f"        {k}: {v}")
+    return len(bad)
 
 
 def main() -> int:
     if WORK.exists():
         shutil.rmtree(WORK)
-    WORK.mkdir(parents=True)
+    (WORK / "cards").mkdir(parents=True)
     print(f"work dir: {WORK}; SDKs: {','.join(DRIVERS)}; now: {NOW}")
     # Three identities per SDK: "a" sends, "b" receives, "c" is a bystander whose identity a forger claims.
     # Each pair runs on its own copies of the identities (drivers may rewrite prekey state), so pairs run in parallel.
@@ -217,23 +215,17 @@ def main() -> int:
                                      *(["--handle", h] if (h := handle_of(*lw)) else [])),
                       [(lang, who) for lang in DRIVERS for who in ("a", "b", "c")]))
         cards = [(lang, who, *case) for lang in DRIVERS for who in ("a", "b") for case in card_cases(lang, who)]
-        card_results = dict(zip(DRIVERS, pool.map(lambda v: run_cards(v, cards), DRIVERS)))
+        # Card verifications and packet pairs are independent: submit both before collecting either.
+        card_jobs = [(v, *case) for v in DRIVERS for case in cards]
+        card_cells = pool.map(lambda j: verify_card(j[0], j[4], j[5]), card_jobs)
         pairs = [(s, r) for s in DRIVERS for r in DRIVERS]
         results = dict(zip(pairs, pool.map(lambda sr: run_pair(*sr), pairs)))
+        card_results: dict[str, dict[str, str]] = {v: {} for v in DRIVERS}
+        for (v, maker, who, name, _, _), cell in zip(card_jobs, card_cells):
+            card_results[v][f"{maker}-{who} {name}"] = cell
 
-    failed = 0
-    for (s, r), cells in results.items():
-        bad = {k: v for k, v in cells.items() if v != "ok"}
-        failed += len(bad)
-        print(f"{s:>5} -> {r:<5} {len(cells) - len(bad)}/{len(cells)} ok")
-        for k, v in bad.items():
-            print(f"        {k}: {v}")
-    for v, cells in card_results.items():
-        bad = {k: c for k, c in cells.items() if c != "ok"}
-        failed += len(bad)
-        print(f"verify-card {v:<5} {len(cells) - len(bad)}/{len(cells)} ok")
-        for k, c in bad.items():
-            print(f"        {k}: {c}")
+    failed = sum(report(f"{s:>5} -> {r:<5}", cells) for (s, r), cells in results.items())
+    failed += sum(report(f"verify-card {v:<5}", cells) for v, cells in card_results.items())
     print(f"cases per pair: {len({k for c in results.values() for k in c})}; pairs: {len(results)}; "
           f"card cases per verifier: {len(cards)}; failures: {failed}")
     return 1 if failed else 0

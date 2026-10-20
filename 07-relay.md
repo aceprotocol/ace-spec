@@ -86,6 +86,8 @@ An identity therefore holds at most one handle, and a handle is never reassigned
 | `GET /v1/card/{aceId}` | the stored CardBundle of a registered identity | `unknown_peer` |
 | `GET /v1/handles/{handle}` | the stored CardBundle of the identity the handle is bound to, when that record's `home` is this relay | `unknown_peer` |
 
+A relay treats a stored card record whose `kel` is not the identity's current registered KEL as absent.
+
 A client resolving a handle checks the CardBundle as [04](04-descriptor.md#card-record) states (its `home` is this relay and its `handle` the one queried) and fails with `unknown_peer` otherwise.
 
 `GET /v1/descriptors` is the public directory: the unexpired PublishedAgents of identities whose stored card record is `listed: true`, ordered by ACE ID, optionally only those listing the exact profile ID `profile`. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`.

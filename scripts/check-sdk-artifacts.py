@@ -122,6 +122,7 @@ SWIFT_NAMES = {
     "PIN_REFRESH_INTERVAL_SECONDS": "pinRefreshIntervalSeconds", "MAX_FETCH_ATTEMPTS": "maxFetchAttempts",
     "MAX_PENDING_CONTACT_REQUESTS": "maxPendingContactRequests", "CONTACT_REQUEST_TTL_SECONDS": "contactRequestTTLSeconds",
     "MAX_STRANGER_KEL_EVENTS": "maxStrangerKelEvents", "MAX_STRANGER_DELEGATIONS": "maxStrangerDelegations",
+    "MAX_CARD_RECORD_BYTES": "maxCardRecordBytes", "MAX_PAY_ACCOUNTS": "maxPayAccounts",
 }
 
 

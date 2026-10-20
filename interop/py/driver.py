@@ -63,7 +63,6 @@ def gen_identity(d: str, now: int) -> None:
         relays=[RELAY],
         prekey=prekey,
         profiles=Profiles().entries(),
-        visibility="public",
         now=now,
     )
     write(os.path.join(d, "identity.json"), identity.export_private_key())

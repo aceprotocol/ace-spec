@@ -35,7 +35,7 @@ from ace import (
     SoftwareIdentity, SoftwareKey, canonical_state_bytes, check_receipt_body, check_stranger_source, conversation_key, create_auth_headers,
     create_permit, create_registration_request, create_packet, decode_content, decode_packet, decrypt_packet, extend_kel, is_usable,
     issue_delegation, key_digest, signing_message, verify_delegation, verify_erc8004_registration, verify_kel, verify_operational_signature,
-    verify_packet, verify_permit, verify_published_agent, verify_signature,
+    verify_packet, verify_permit, verify_published_agent, verify_signature, create_card_record, verify_card_bundle,
 )
 from ace import _xwing
 from ace._encoding import (
@@ -739,8 +739,7 @@ COMMERCE_EXT = {"settlement": [{"method": "stablecoin", "asset": "eip155:8453/er
 DLG_ENTRY = issue_delegation(dave.identity, alice.id, now=NOW - 100, lifetime=604800)
 BASE = {
     "aceId": alice.id, "issuedAt": NOW - 100, "expiresAt": NOW + 3600, "relays": [RELAY],
-    "prekey": ALICE_PREKEY, "profiles": [TEXT.descriptor(), COMMERCE.descriptor()], "visibility": "public", "handle": "alice",
-    "card": {"name": "Alice", "description": "translation agent", "image": "https://example.com/a.png", "tags": ["nlp", "hosted"]},
+    "prekey": ALICE_PREKEY, "profiles": [TEXT.descriptor(), COMMERCE.descriptor()],
     "ext": {"ace:commerce:1": COMMERCE_EXT}, "delegations": [DLG_ENTRY],
     "erc8004": [{"agentRegistry": "eip155:8453:0x8004a169fb4a3325136eb29fa0ceb6d2e539a432", "agentId": "42"}],
 }
@@ -766,9 +765,11 @@ BASE_PA = published(BASE)
 va = verify_published_agent(BASE_PA, now=NOW)
 assert va.delegations == (dave.id,)
 desc_valid.append({"name": "full descriptor", "publishedAgent": BASE_PA, "now": NOW, "delegations": [dave.id]})
-_min = {k: v for k, v in BASE.items() if k not in ("handle", "ext", "delegations", "erc8004")}
-_min = {**_min, "visibility": "private", "card": {}, "profiles": []}
-desc_valid.append({"name": "minimal private descriptor", "publishedAgent": published(_min), "now": NOW, "delegations": []})
+_min = {k: v for k, v in BASE.items() if k not in ("ext", "delegations", "erc8004")}
+_min = {**_min, "profiles": []}
+desc_valid.append({"name": "minimal descriptor", "publishedAgent": published(_min), "now": NOW, "delegations": []})
+desc_valid.append({"name": "lifetime of 604800 (7 days)", "publishedAgent": published({**_min, "expiresAt": NOW - 100 + 604800}),
+                   "now": NOW, "delegations": []})
 _exp_dlg = issue_delegation(dave.identity, alice.id, now=NOW - 700000, lifetime=604800)
 _pa = published({**BASE, "delegations": [_exp_dlg]})
 assert verify_published_agent(_pa, now=NOW).delegations == ()
@@ -804,7 +805,7 @@ field("a version member (unknown in the closed object)", version=1)
 field("aceId of another identity", aceId=bob.id)
 field("issuedAt beyond now + 300", issuedAt=NOW + 301, expiresAt=NOW + 3600)
 field("expiresAt not after issuedAt", expiresAt=NOW - 100)
-field("lifetime above 86400", issuedAt=NOW - 100, expiresAt=NOW - 100 + 86401)
+field("lifetime above 604800", issuedAt=NOW - 100, expiresAt=NOW - 100 + 604801)
 bad_desc("expired (now == expiresAt)", BASE_PA, IA, now=NOW + 3600)
 field("no relays", relays=[])
 field("five relays", relays=[f"https://r{i}.example" for i in range(5)])
@@ -822,17 +823,8 @@ field("duplicate profile id", profiles=[TEXT.descriptor(), TEXT.descriptor()])
 field("33 profiles", profiles=[{"id": f"x:p{i}", "digest": "a" * 64} for i in range(33)], ext=DELETE)
 field("profile digest uppercase", profiles=[{"id": "ace:text:1", "digest": "A" * 64}], ext=DELETE)
 field("profile entry with an extra member", profiles=[{**TEXT.descriptor(), "x": 1}], ext=DELETE)
-field("visibility 'secret'", visibility="secret")
-field("handle while private", visibility="private")
-field("handle grammar", handle="Al")
-field("card unknown member", card={"name": "x", "url": "https://x.example"})
-field("card name of 65 characters", card={"name": "a" * 65})
-field("card empty name", card={"name": ""})
-field("card description of 257 characters", card={"description": "a" * 257})
-field("card image over http", card={"image": "http://example.com/a.png"})
-field("card tag uppercase", card={"tags": ["NLP"]})
-field("card 11 tags", card={"tags": [f"t{i}" for i in range(11)]})
-field("card duplicate tags", card={"tags": ["a", "a"]})
+field("handle member (moved to the card record)", handle="alice")
+field("card member (moved to the card record)", card={"name": "Alice"})
 field("ext key not a listed profile", ext={"x:other:1": {}})
 field("ext value not an object", ext={"ace:commerce:1": []})
 field("ext for an official profile that defines none", ext={"ace:text:1": {}})
@@ -864,7 +856,7 @@ _c_dlg = {"issuer": carol.id, "subject": alice.id, "issuedAt": NOW - 100, "expir
 _c_dlg = {**_c_dlg, "signature": carol.raw_sign("delegation", NOW - 100, canonical_state_bytes(_c_dlg))}
 bad_desc("delegation issuer not usable at now", published({**BASE, "delegations": [{"kel": carol.kel, "credential": _c_dlg}]}), IA, now=NOW + 200)
 _tampered = published(BASE)
-_tampered["descriptor"]["card"] = {"name": "Mallory"}
+_tampered["descriptor"]["expiresAt"] -= 1
 bad_desc("claims changed after signing", _tampered, IA)
 bad_desc("descriptor signed with a superseded delegation seq", published({**BASE, "aceId": bob.id, "delegations": [issue_delegation(dave.identity, bob.id, now=NOW - 100)]}, signer=bob, seq=1), "stale_peer_binding")
 bad_desc("descriptor kel not usable at now (carol, now >= notAfter)", published({**BASE, "aceId": carol.id, "delegations": [issue_delegation(dave.identity, carol.id, now=NOW - 100)]}, signer=carol), "invalid_kel", now=NOW + 100)
@@ -1031,6 +1023,126 @@ erc8004 = {
               "registrations: verifyErc8004Registration(registration, aceId) == result (a string is JSON text)."),
     "shapes": [{"entry": e, "valid": ok} for e, ok in ERC_SHAPES],
     "registrations": [{"registration": r, "aceId": alice.id, "result": ok} for r, ok in ERC_REG],
+}
+
+# =============================================================================== card record (04 § Card record)
+
+CARD_HOME = "https://relay.interop.test"
+SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+CARD_BASE = {
+    "aceId": alice.id, "issuedAt": NOW - 100, "home": CARD_HOME, "handle": "alice",
+    "card": {"name": "Alice", "description": "translation agent", "image": "https://example.com/a.png", "tags": ["nlp", "hosted"]},
+    "pay": [SOL], "contact": "open", "listed": False,
+}
+
+
+def card_bundle(claims, signer: Agent = alice, kel=None, seq=None):
+    """A CardBundle over ``claims`` (signed by ``signer`` without signer-side checks when they would refuse)."""
+    c = {k: v for k, v in claims.items() if k != "signature"}
+    if seq is None:
+        try:
+            r = sign_claims(signer.identity, "card-record", c)
+        except ACEError:
+            r = {**c, "signature": signer.raw_sign("card-record", c["issuedAt"], canonical_state_bytes(c))}
+    else:
+        r = {**c, "signature": signer.raw_sign("card-record", c["issuedAt"], canonical_state_bytes(c), seq=seq)}
+    return {"kel": signer.kel if kel is None else kel, "card": r}
+
+
+def card_summary(v) -> dict:
+    r = v.record
+    return {"aceId": v.ace_id, "home": r["home"], "handle": r.get("handle"), "pay": r.get("pay"), "contact": r["contact"],
+            "listed": r["listed"]}
+
+
+BASE_CARD = card_bundle(CARD_BASE)
+# the SDK's own constructor produces the same claims
+_made = create_card_record(alice.identity, home=CARD_HOME, handle="alice", card=CARD_BASE["card"], pay=[SOL], contact="open",
+                           listed=False, now=NOW - 100)
+assert {k: v for k, v in _made["card"].items() if k != "signature"} == CARD_BASE
+card_valid, card_invalid = [], []
+
+
+def good_card(name, bundle, now=NOW):
+    card_valid.append({"name": name, "bundle": bundle, "now": now, "expect": card_summary(verify_card_bundle(bundle, now))})
+
+
+def bad_card(name, bundle, code, now=NOW):
+    expect(f"card record {name}", lambda: verify_card_bundle(bundle, now), code)
+    card_invalid.append({"name": name, "bundle": bundle, "now": now, "error": code})
+
+
+def card_field(name, code=IA, **changes):
+    claims = copy.deepcopy(CARD_BASE)
+    for k, v in changes.items():
+        if v is DELETE:
+            claims.pop(k, None)
+        else:
+            claims[k] = v
+    bad_card(name, card_bundle(claims), code)
+
+
+good_card("alice: handle, home, pay, open, unlisted", BASE_CARD)
+good_card("minimal: no handle, no pay, empty card, closed", card_bundle(
+    {"aceId": alice.id, "issuedAt": NOW - 100, "home": CARD_HOME, "card": {}, "contact": "closed", "listed": True}))
+good_card("no expiry: verifies a year later", BASE_CARD, now=NOW + 365 * 86400)
+good_card("issuedAt at now + 300", card_bundle({**CARD_BASE, "issuedAt": NOW + 300}))
+good_card("8 pay accounts", card_bundle({**CARD_BASE, "pay": [f"eip155:1:0x{i:040x}" for i in range(8)]}))
+good_card("home with a path and port", card_bundle({**CARD_BASE, "home": "https://relay.example:8443/ace"}))
+_sig = copy.deepcopy(BASE_CARD)
+_v = bytearray(base64.b64decode(_sig["card"]["signature"]["value"]))
+_v[0] ^= 1
+_sig["card"]["signature"]["value"] = b64(bytes(_v))
+bad_card("tampered signature value", _sig, IA)
+_tampered_card = copy.deepcopy(BASE_CARD)
+_tampered_card["card"]["listed"] = True
+bad_card("claims changed after signing", _tampered_card, IA)
+card_field("a version member (unknown in the closed object)", version=1)
+card_field("aceId of another identity", aceId=bob.id)
+card_field("no contact", contact=DELETE)
+card_field("no card", card=DELETE)
+card_field("no home", home=DELETE)
+card_field("no listed", listed=DELETE)
+card_field("issuedAt beyond now + 300", issuedAt=NOW + 301)
+_frac = copy.deepcopy(BASE_CARD)
+_frac["card"]["issuedAt"] = NOW - 100.5
+bad_card("issuedAt not an integer", _frac, IA)
+card_field("contact 'public'", contact="public")
+card_field("listed as a string", listed="false")
+card_field("home with a trailing slash", home=CARD_HOME + "/")
+card_field("home with an uppercase host", home="https://Relay.interop.test")
+card_field("home over http", home="http://relay.interop.test")
+card_field("loopback http home (development only)", home="http://127.0.0.1:8080")
+card_field("handle grammar", handle="Al")
+card_field("handle of 33 characters", handle="a" * 33)
+card_field("9 pay accounts", pay=[f"eip155:1:0x{i:040x}" for i in range(9)])
+card_field("empty pay", pay=[])
+card_field("duplicate pay", pay=[SOL, SOL])
+card_field("pay entry not CAIP-10", pay=["solana:7xKX"])
+card_field("pay entry not a string", pay=[1])
+card_field("card unknown member", card={"name": "x", "url": "https://x.example"})
+card_field("card name of 65 characters", card={"name": "a" * 65})
+card_field("card empty name", card={"name": ""})
+card_field("card description of 257 characters", card={"description": "a" * 257})
+card_field("card image over http", card={"image": "http://example.com/a.png"})
+card_field("card tag uppercase", card={"tags": ["NLP"]})
+card_field("card 11 tags", card={"tags": [f"t{i}" for i in range(11)]})
+card_field("card duplicate tags", card={"tags": ["a", "a"]})
+card_field("record above 16384 canonical bytes", card={"name": "Alice", "description": "x" * 16384})
+bad_card("bundle with an extra member", {**BASE_CARD, "x": 1}, IA)
+bad_card("bundle without kel", {"card": BASE_CARD["card"]}, IA)
+bad_card("signed with a superseded delegation seq", card_bundle({**CARD_BASE, "aceId": bob.id}, signer=bob, seq=1), "stale_peer_binding")
+bad_card("kel not usable at now (carol, now >= notAfter)", card_bundle({**CARD_BASE, "aceId": carol.id}, signer=carol), "invalid_kel",
+         now=NOW + 100)
+bad_card("kel does not verify", card_bundle(CARD_BASE, kel=_badkel), "invalid_signature")
+card_records = {
+    "rules": (
+        "verifyCardBundle(bundle, now) with production settings (no loopback relays). valid: succeeds and the record's "
+        "aceId, home, handle, pay (null when absent), contact and listed equal 'expect'. invalid: fails with 'error'. "
+        "A card record has no expiry."
+    ),
+    "valid": card_valid,
+    "invalid": card_invalid,
 }
 
 # =============================================================================== manifests
@@ -1470,7 +1582,7 @@ def receipt_of(out) -> str | None:
     return content["body"]["outcome"]
 
 
-def pipeline_case(name, steps, *, public=False, capacity=100_000, pinned=()):
+def pipeline_case(name, steps, *, contact="closed", capacity=100_000, pinned=()):
     clock = {"t": NOW}
     store = MemoryStore()
     peers = PeerStore(store, clock=lambda: clock["t"])
@@ -1479,7 +1591,7 @@ def pipeline_case(name, steps, *, public=False, capacity=100_000, pinned=()):
         peers.adopt(pa, NOW)
         peers.set_status(agent.id, "admitted")
         pins[agent.name] = pa
-    inbox = Inbox.open(bob.identity, store, bob_vault(), peers, Profiles(), on_message=lambda m: None, public=public,
+    inbox = Inbox.open(bob.identity, store, bob_vault(), peers, Profiles(), on_message=lambda m: None, contact=contact,
                        capacity=capacity, clock=lambda: clock["t"])
     out_steps = []
     for packet_, now, want in steps:
@@ -1490,7 +1602,7 @@ def pipeline_case(name, steps, *, public=False, capacity=100_000, pinned=()):
         assert got == want, (name, got, want)
         out_steps.append({"packet": packet_, "now": now, "expect": want})
     inbox.close()
-    return {"name": name, "receiver": "bob", "public": public, "capacity": capacity, "admitted": pins, "steps": out_steps}
+    return {"name": name, "receiver": "bob", "contact": contact, "capacity": capacity, "admitted": pins, "steps": out_steps}
 
 
 def X(disposition, code=None, receipt=None):
@@ -1509,7 +1621,7 @@ pipeline_cases = [
     pipeline_case("a stranger's contact request signed two hours ago is held (no separate contact window)", [
         (contact_packet(920, NOW - 7200), NOW, X("delivered")),
         (contact_packet(921, NOW - 604801), NOW, X("drop", "stale_timestamp")),
-    ], public=True),
+    ], contact="open"),
     pipeline_case("back-dated: signed before the sender's notAfter, received after it, is dropped stale_peer_binding", [
         (text_packet(carol, 911, NOW + 50), NOW + 60, X("delivered", receipt="delivered")),
         (text_packet(carol, 910, NOW + 50), NOW + 150, X("drop", "stale_peer_binding")),
@@ -1518,7 +1630,7 @@ pipeline_cases = [
 pipeline = {
     "rules": (
         "06 § Receive pipeline. For each case a fresh receiver agents[receiver] whose vault holds only "
-        "packet.deterministic.prekeySeed, whose descriptor visibility is public iff 'public', whose seen store has "
+        "packet.deterministic.prekeySeed, whose own card record has contact 'contact' (open or closed), whose seen store has "
         "capacity 'capacity', and which has pinned and admitted each 'admitted' PublishedAgent (verified at the vectors' "
         "'now'). Run the steps in order, each at clock 'now': processing 'packet' ends in 'disposition' (delivered, "
         "duplicate, drop or reject) with record code 'code' (null on success), and the receiver sends a receipt whose "
@@ -1788,8 +1900,8 @@ with open(os.path.join(SPEC, "protocol-contract.json"), encoding="utf-8") as f:
 assert contract["profiles"] == {o["id"]: o["digest"] for o in official}
 
 vectors = {
-    "version": 9,
-    "description": "ACE shared conformance vectors (2026-10-16 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
+    "version": 10,
+    "description": "ACE shared conformance vectors (2026-10-20 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
     "now": NOW,
     "agents": {a.name: {"aceId": a.id, "export": a.export(), **({"supersededSigningSeeds": {"1": b64(bob.extra_signing[1].seed)}} if a is bob else {})}
                for a in AGENTS.values()},
@@ -1805,6 +1917,7 @@ vectors = {
     "descriptor": descriptor,
     "delegation": delegation,
     "permit": permit,
+    "cardRecords": card_records,
     "erc8004": erc8004,
     "manifests": manifests,
     "coreRules": core_rules,

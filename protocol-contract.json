@@ -16,6 +16,7 @@
     "agent-descriptor": "canonicalStateBytes(claims)",
     "delegation": "canonicalStateBytes(claims)",
     "delivery-permit": "canonicalStateBytes(claims)",
+    "card-record": "canonicalStateBytes(claims)",
     "register-request": "encodePayload(lastHashHex, audience)",
     "listen": "encodePayload(sinceOrDash)",
     "inbox": "encodePayload(sinceOrDash, decimal(limit))",
@@ -40,17 +41,19 @@
     "MAX_PACKET_BYTES": 2097152,
     "MAX_SEND_BODY_BYTES": 2162688,
     "MAX_PUBLISHED_AGENT_BYTES": 1048576,
+    "MAX_CARD_RECORD_BYTES": 16384,
     "MAX_JSON_DEPTH": 32,
     "MAX_TYPE_BYTES": 256,
     "MAX_THREAD_ID_LENGTH": 256,
     "MAX_KEL_EVENTS": 256,
     "MAX_SIGNING_KEY_LIFETIME": 31622400,
-    "MAX_DESCRIPTOR_LIFETIME": 86400,
+    "MAX_DESCRIPTOR_LIFETIME": 604800,
     "MAX_DELEGATION_LIFETIME": 604800,
     "MAX_PERMIT_LIFETIME": 2592000,
     "PERMIT_RENEWAL_SECONDS": 1296000,
     "MAX_RETAINED_PREKEYS": 16,
     "MAX_EXT_BYTES": 4096,
+    "MAX_PAY_ACCOUNTS": 8,
     "MAX_NOTE_BYTES": 512,
     "MAX_INBOX_PAGE": 100,
     "DEFAULT_PAGE_LIMIT": 20,
@@ -68,6 +71,7 @@
   },
   "relayLimits": {
     "CLIENT_NETWORK_PREFIX_IPV4": 24,
-    "CLIENT_NETWORK_PREFIX_IPV6": 56
+    "CLIENT_NETWORK_PREFIX_IPV6": 56,
+    "HANDLE_CLAIMS_PER_NETWORK_PER_DAY": 8
   }
 }

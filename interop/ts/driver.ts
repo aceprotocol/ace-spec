@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACEError, CONTACT_TYPE, MemoryStore, ProfileSet, RECEIPT_TYPE, SoftwareIdentity, StorePrekeyVault, checkPacketTime,
-  contactContent, createDescriptor, verifyKel, createPacket, createPermit, decodePacket, decryptPacket, receiptContent,
+  contactContent, createCardRecord, createDescriptor, verifyCardBundle, verifyKel, createPacket, createPermit, decodePacket, decryptPacket, receiptContent,
   verifyPacketSignature, verifyPermit, verifyPublishedAgent, TEXT_TYPE, BUNDLED_MANIFESTS, messageDigest,
   checkReceiptBody, MAX_NOTE_BYTES,
   type PrivateContent, type PublishedAgent,
@@ -33,7 +33,7 @@ async function load(dir: string, now: number) {
   return { identity, vault, agent };
 }
 
-async function genIdentity(dir: string, now: number) {
+async function genIdentity(dir: string, now: number, handle?: string) {
   mkdirSync(dir, { recursive: true });
   const identity = await SoftwareIdentity.generate({ now });
   const store = new MemoryStore();
@@ -43,10 +43,22 @@ async function genIdentity(dir: string, now: number) {
   writeFileSync(join(dir, VAULT_KEY), (await store.read(VAULT_KEY))!, { mode: 0o600 });
   const profiles = new ProfileSet(['text']);
   const agent = await createDescriptor(identity, {
-    relays: [RELAY], prekey: { id: pk.id, publicKey: pk.publicKey }, profiles: profiles.descriptors(), visibility: 'public', now,
+    relays: [RELAY], prekey: { id: pk.id, publicKey: pk.publicKey }, profiles: profiles.descriptors(), now,
   });
   writeJson(join(dir, 'identity.json'), identity.exportPrivateKey());
   writeJson(join(dir, 'agent.json'), agent);
+  const card = await createCardRecord(identity, { home: RELAY, ...(handle !== undefined ? { handle } : {}), contact: 'open', listed: false, now });
+  writeJson(join(dir, 'card.json'), card);
+}
+
+function verifyCard(path: string, now: number) {
+  try {
+    const { aceId, record } = verifyCardBundle(readJson(path), now);
+    return { ok: true, aceId, ...(record.handle !== undefined ? { handle: record.handle } : {}), contact: record.contact, listed: record.listed };
+  } catch (e) {
+    if (!(e instanceof ACEError)) throw e;
+    return { error: e.code };
+  }
 }
 
 async function create(dir: string, o: Record<string, string>, now: number) {
@@ -106,7 +118,8 @@ async function main() {
   const now = Number(opt.now ?? process.env.ACE_INTEROP_NOW);
   if (!Number.isSafeInteger(now)) throw new Error('--now is required');
   const dir = pos[0];
-  if (cmd === 'gen-identity') return genIdentity(dir, now);
+  if (cmd === 'gen-identity') return genIdentity(dir, now, opt.handle);
+  if (cmd === 'verify-card') { console.log(JSON.stringify(verifyCard(dir, now))); return; }
   if (cmd === 'create-packet') return create(dir, opt, now);
   if (cmd === 'open-packet') {
     let out: unknown;

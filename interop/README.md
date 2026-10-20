@@ -1,9 +1,10 @@
 # ACE interop matrix
 
-A live cross-SDK check of the only wire objects agents exchange: packets carrying text, receipts
-(`ace:receipt:1`) and contact requests (`ace:contact:1`). No relay is involved: each SDK is driven
-through a small command-line **driver**, artifacts are exchanged as JSON files, and every directed
-pair of SDKs (same-SDK pairs included) is run.
+A live cross-SDK check of the wire objects agents exchange: packets carrying text, receipts
+(`ace:receipt:1`) and contact requests (`ace:contact:1`), and card records
+([04 § Card record](../04-descriptor.md#card-record)). No relay is involved: each SDK is driven
+through a small command-line **driver**, artifacts are exchanged as JSON files, every directed
+pair of SDKs (same-SDK pairs included) is run, and every SDK verifies every SDK's card records.
 
 ```
 bash ace-spec/interop/run.sh                       # TypeScript and Python
@@ -24,13 +25,25 @@ seconds>` (every operation uses that clock and nothing else, so runs are reprodu
 on success and non-zero only on an internal failure (bad arguments, an unexpected exception); a
 protocol rejection while opening is a successful run whose result is `{"error": <code>}`.
 
-### `gen-identity <dir> --now N`
+### `gen-identity <dir> [--handle H] --now N`
 
 Generate a software identity (ML-DSA root, next root, signing key) and one X-Wing prekey dated
 `N`, persisting whatever the driver needs to sign and decrypt later inside `<dir>` (format private
-to the driver). Write `<dir>/agent.json`: the PublishedAgent `{kel, descriptor}` issued at `N`
-(lifetime 86400), `relays: ["https://relay.interop.test"]`, `visibility: "public"`, `profiles`
-listing exactly `ace:text:1` with its profile digest, empty `card`.
+to the driver). Write two files:
+
+- `<dir>/agent.json`: the PublishedAgent `{kel, descriptor}` issued at `N` (lifetime 86400),
+  `relays: ["https://relay.interop.test"]`, `profiles` listing exactly `ace:text:1` with its
+  profile digest;
+- `<dir>/card.json`: the CardBundle `{kel, card}` whose card record is issued at `N` with
+  `home: "https://relay.interop.test"`, `card: {}`, `contact: "open"`, `listed: false`, no `pay`,
+  and `handle: H` exactly when `--handle` is given (the matrix gives `<sdk>-a`, e.g. `ts-a`, to each
+  SDK's identity `a` and no handle to `b` and `c`).
+
+### `verify-card <card.json> --now N`
+
+Verify the CardBundle in the file at `N` (04 § Card record steps 1-3; no pin) and print one JSON
+line to stdout: `{"ok": true, "aceId", "handle"?, "contact", "listed"}`, or `{"error": <code>}` for
+a protocol rejection.
 
 ### `create-packet <dir> --to-agent F --kind K --out P [options] --now N`
 
@@ -88,7 +101,19 @@ ACE_INTEROP_SWIFT="$(cd sdk-swift && swift build -c release --show-bin-path)/ACE
 
 `matrix.py` invokes it exactly like the other drivers (`<exe> <subcommand> <dir> ... --now N`).
 
-## Cases (per directed pair)
+## Card cases (per verifier)
+
+Each SDK runs `verify-card` over the card records of identities `a` (with a handle) and `b` (without)
+of every SDK, and over tampered copies of each:
+
+| Case | Expectation |
+|---|---|
+| `valid` | `{ok: true, aceId, handle?, contact: "open", listed: false}`, `aceId` that of the identity's `agent.json` and `handle` present exactly for `a` (the matrix also checks the generated record against the `gen-identity` contract) |
+| `tamper-signature` (a flipped byte of `signature.value`), `tamper-listed`, `tamper-contact` | the signature covers every claim: `invalid_authorization` |
+| `tamper-unknown-member` (`visibility` added) | the record is closed: `invalid_authorization` |
+| `tamper-seq` | `signature.seq` names an unknown delegation: `stale_peer_binding` |
+
+## Packet cases (per directed pair)
 
 | Case | Expectation |
 |---|---|

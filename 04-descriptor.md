@@ -1,6 +1,6 @@
 # 04 — Descriptor
 
-An agent publishes a **PublishedAgent**: the closed object `{kel, descriptor}`, whose canonical JSON is at most `MAX_PUBLISHED_AGENT_BYTES`. `kel` is the agent's complete KEL ([01](01-identity.md)). The descriptor is self-asserted, signed and short-lived. It is the only discovery document in ACE.
+An agent publishes a **PublishedAgent**: the closed object `{kel, descriptor}`, whose canonical JSON is at most `MAX_PUBLISHED_AGENT_BYTES`. `kel` is the agent's complete KEL ([01](01-identity.md)). The descriptor is self-asserted, signed and short-lived: it carries what changes (routes, prekey, profiles). Durable identity facts live in the card record ([§ Card record](#card-record)).
 
 ## Fields
 
@@ -13,9 +13,6 @@ The descriptor is a closed object:
 | `relays` | 1–4 distinct canonical relay URLs ([02](02-encoding.md#relay-urls)) at which the agent is registered and reads its inbox |
 | `prekey` | `{id, publicKey}` ([§ Prekey](#prekey)) |
 | `profiles` | At most 32 `{id, digest}` with distinct `id`s: each enabled profile and its profile digest ([08](08-profiles.md#digests)). `ace:core:1` is always installed and MUST NOT be listed |
-| `visibility` | `private` or `public` ([§ Visibility and handles](#visibility-and-handles)) |
-| `handle` | Optional handle; only when `visibility` is `public` |
-| `card` | [§ Card](#card) |
 | `ext` | Optional; [§ Extensions](#extensions) |
 | `delegations` | Optional, 1–4 entries; [§ Delegations](#delegations) |
 | `erc8004` | Optional, 1–4 entries; [§ ERC-8004](#erc-8004) |
@@ -30,7 +27,7 @@ A verifier checks a PublishedAgent at one clock reading `now`, in this order; th
 3. The signature verifies as an operational signature of that KEL ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
 4. Each delegation entry verifies ([§ Delegations](#delegations)). An entry that fails only because it has expired is dropped from the verifier's view; any other failure is `invalid_authorization`.
 
-Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Directory, lookup and resolve results are always complete signed PublishedAgents; a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true.
+Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Directory and lookup results are always complete signed PublishedAgents; a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true.
 
 ## Caching
 
@@ -50,16 +47,41 @@ SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotat
 
 The forward-secrecy window is the retention period ([06](06-delivery.md#security-considerations)).
 
-## Visibility and handles
+## Card record
 
-- `public`: the agent appears in its relays' directory, can be looked up anonymously by ACE ID and handle, and accepts contact requests from strangers ([05](05-admission.md)).
-- `private`: the agent is absent from every public surface, even to someone who knows its ACE ID. Holders of a valid delivery permit it issued resolve its descriptor ([07](07-relay.md#descriptors)).
+An agent states its durable identity facts in a **card record** and publishes it at its home relay as the closed **CardBundle** `{kel, card}`, whose canonical JSON is at most `MAX_PUBLISHED_AGENT_BYTES`. `kel` is the agent's complete KEL; `card` is the card record, a closed object whose canonical JSON is at most `MAX_CARD_RECORD_BYTES`:
 
-A handle is written `@name@relay.example` and its descriptor member is the slug `name`. It belongs to the namespace of `relays[0]`, which allows one active identity per handle. A handle is a lease that ends when the descriptor expires, turns private or the identity unregisters; another identity may then acquire it. A client resolving a handle MUST verify public visibility, the matching handle and that `relays[0]` is the relay it queried. Contacts are saved by ACE ID; a handle changing owner MUST NOT silently redirect a saved contact.
+| Field | Rule |
+|---|---|
+| `aceId` | The ACE ID of `kel` |
+| `issuedAt` | Wire integer, `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS` |
+| `home` | Canonical relay URL ([02](02-encoding.md#relay-urls)) of the relay that holds the record; `handle` belongs to its namespace |
+| `handle` | Optional handle ([02](02-encoding.md#identifiers)) |
+| `card` | [§ Card](#card) |
+| `pay` | Optional, 1–`MAX_PAY_ACCOUNTS` distinct CAIP-10 accounts ([02](02-encoding.md#identifiers)) at which the agent asks to be paid |
+| `contact` | `open` or `closed`: whether the agent processes contact requests from strangers ([05](05-admission.md#flow)) |
+| `listed` | Boolean: whether the agent appears in its home relay's directory ([07](07-relay.md#descriptors-and-cards)) |
+| `signature` | Delegated signature, action `card-record`, with `aceId`, `timestamp = issuedAt` and payload `canonicalStateBytes(claims)` ([02](02-encoding.md#signing-actions)) |
+
+A verifier checks a CardBundle at one clock reading `now`, in this order; the first failure wins:
+
+1. Shape: the closed objects and field rules above, including both size bounds (`invalid_authorization`).
+2. `kel` verifies and is usable at `now` ([01](01-identity.md#verifier-rules); `invalid_kel` / `invalid_signature`); `aceId` equals its ACE ID (`invalid_authorization`).
+3. The signature verifies as an operational signature of that KEL ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
+
+A card record does not expire: it stands until a newer `issuedAt` replaces it or the identity unregisters. A record signed under a superseded delegation fails step 3, so an agent re-signs its record after every `dlg`. A verified record proves who asserted it, not that it is true: a `pay` account is claimed, not proven to be controlled by the agent. An agent without a card record is treated as `contact: closed` and unlisted.
+
+A client that has verified a card record for an identity MUST NOT accept one with an older `issuedAt`, nor one with an equal `issuedAt` and different claims (`stale_descriptor`). It keeps the highest `issuedAt` and the claims digest at it for each identity, durably, and checks them before the handle rule below.
+
+A card record cannot be revoked by a newer one alone: a holder of the signing key can sign records, including `pay` accounts, until a new `dlg` replaces that key, and a client that has not pinned the identity's KEL accepts any record signed under a delegation within its `notAfter`. Revoking a `pay` account therefore requires a new `dlg`. A client SHOULD pin the identity's KEL, by looking up its descriptor ([§ Verification](#verification)), before relying on `pay`. When the descriptor lookup answers `unknown_peer` at every relay it asked (the identity has no live descriptor), a client MAY verify the card against the bundle's own KEL and pin that KEL under the same rules; it SHOULD surface that the KEL was not confirmed live. A transient or other failure at any relay asked MUST NOT trigger this fallback: the lookup fails instead. A KEL pinned this way is reported as not confirmed live, durably, until a live descriptor reconciled with the pin confirms it; until then the client looks the descriptor up again on each card lookup. A key holder can sign `issuedAt` up to `now + TIMESTAMP_WINDOW_SECONDS`, so after the `dlg` the owner's re-signed record can be refused as `stale_descriptor` for up to `TIMESTAMP_WINDOW_SECONDS`.
+
+Every registered agent's unexpired descriptor can be looked up by ACE ID ([07](07-relay.md#descriptors-and-cards)); `contact` and `listed` decide only who may request contact and whether the agent is listed.
+
+**Handles.** A handle is written `@name@host`, where `host` is the host (with its port, if any) of `home`, and the record member is the slug `name`. A handle is set once: an identity claims it with the first card record that carries it, and the relay of `home` binds it to that identity permanently, also after unregister; it is never reassigned or renamed. For as long as `home` names the same relay, every card record the identity publishes MUST carry the same `handle`. A record naming another `home` claims nothing at the earlier relay, whose binding stays; the handle there then resolves as `unknown_peer`. A client that has pinned a handle for an ACE ID at a `home` treats a CardBundle of that identity naming the same `home` with a different or missing `handle` as `invalid_authorization`. A client resolving `@name@host` queries `GET /v1/handles/{name}` at the relay of `host`, verifies the returned CardBundle and MUST check that its `home` is the relay it queried and its `handle` is `name`; otherwise the result is `unknown_peer`. The binding of `@name@host` to an ACE ID is trusted to the relay of `host`. Bindings are permanent, so a relay that resolves a handle to a different ACE ID than before has misbehaved detectably: a client MUST pin `(home, handle) → aceId`, durably, on its first resolution and treat a resolution to a different ACE ID as `invalid_authorization`. A relay whose public URL has a path MUST NOT bind handles, because a handle resolves at `https://host`; a record naming it as `home` with a `handle` claims nothing. Contacts are saved by ACE ID; a handle only finds one.
 
 ## Card
 
-`card` is a closed object; every member is optional:
+The `card` member of a card record is a closed object; every member is optional:
 
 | Member | Rule |
 |---|---|

@@ -113,7 +113,8 @@ paths:
           "$ref": "#/components/responses/Error"
   "/v1/descriptor/{aceId}":
     get:
-      summary: Look up a public descriptor
+      summary: Look up a descriptor
+      description: "The unexpired PublishedAgent of any registered identity; unknown_peer otherwise."
       parameters:
         - name: aceId
           in: path
@@ -135,33 +136,55 @@ paths:
           "$ref": "#/components/responses/TooManyRequests"
         "500":
           "$ref": "#/components/responses/Error"
-  "/v1/descriptor/resolve":
+  "/v1/card":
     post:
-      summary: Resolve a descriptor with a permit issued by the target
-      description: "Returns private descriptors too; any permit failure is unknown_peer. The caller need not be registered."
-      x-ace-action: delivery-permit
+      summary: "Publish the caller's card record"
+      description: "04 § Card record, 07 § Descriptors and cards. Authenticated by the card record signature; kel must equal the registered KEL; issuedAt must be newer than the stored record's (equal with identical claims is idempotent, else 409 stale_descriptor). Handles are set once: a record whose home is another relay claims nothing here (an existing binding stays); when home is this relay and the identity has a handle bound here, the record must carry exactly that handle (400 invalid_argument otherwise); a relay whose public URL has a path binds no handle; else, when home is this relay, a named handle is bound permanently (409 handle_taken when bound to another identity or reserved by the relay's naming policy; at most 8 bindings per client network per day, 429 rate_limited). Bindings survive unregister and are never reassigned."
+      x-ace-action: card-record
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: false
-              required:
-                - aceId
-                - permit
-              properties:
-                aceId:
-                  "$ref": "#/components/schemas/AceId"
-                permit:
-                  "$ref": "#/components/schemas/Permit"
+              "$ref": "#/components/schemas/CardBundle"
       responses:
         "200":
           description: Success
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/PublishedAgent"
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/card/{aceId}":
+    get:
+      summary: Look up a card record
+      description: "The stored CardBundle of a registered identity; unknown_peer otherwise."
+      parameters:
+        - name: aceId
+          in: path
+          required: true
+          schema:
+            "$ref": "#/components/schemas/AceId"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CardBundle"
         "400":
           "$ref": "#/components/responses/Error"
         "404":
@@ -172,7 +195,8 @@ paths:
           "$ref": "#/components/responses/Error"
   "/v1/handles/{handle}":
     get:
-      summary: Look up a public handle
+      summary: Look up a handle
+      description: "The CardBundle of the identity whose active handle it is; an unbound handle, or one whose identity has no card record or whose record's home is another relay, is unknown_peer. Clients check that card.home is this relay and card.handle the queried handle, and pin the handle's aceId on first resolution (a later different aceId is invalid_authorization)."
       parameters:
         - name: handle
           in: path
@@ -185,7 +209,7 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/PublishedAgent"
+                "$ref": "#/components/schemas/CardBundle"
         "400":
           "$ref": "#/components/responses/Error"
         "404":
@@ -197,6 +221,7 @@ paths:
   "/v1/descriptors":
     get:
       summary: Public directory
+      description: "Unexpired PublishedAgents of identities whose stored card record is listed: true, names this relay as home and was published under the currently registered KEL, ordered by ACE ID."
       parameters:
         - name: profile
           in: query
@@ -293,7 +318,7 @@ paths:
   "/v1/send":
     post:
       summary: Queue a packet for a registered recipient
-      description: "Body at most 2162688 bytes. A blocked sender is refused before any permit or stranger check. With a permit: issuer = to, subject = from, verified against the recipient's KEL at now. Without: the recipient must be public (stranger allowance: 16 entries per recipient, 2 per client network). The relay does not verify the packet signature. Every refusal of the recipient (unknown, private, blocking, bad permit) is 403 not_permitted with one message; byte and rate budgets are 429 rate_limited (or recipient_inbox_full) with Retry-After."
+      description: "Body at most 2162688 bytes. A blocked sender is refused before any permit or stranger check. With a permit: issuer = to, subject = from, verified against the recipient's KEL at now. Without: the recipient must have a stored card record with contact open and an unexpired descriptor (stranger allowance: 16 entries per recipient, 2 per client network). The relay does not verify the packet signature. Every refusal of the recipient (unknown, closed, blocking, bad permit) is 403 not_permitted with one message; byte and rate budgets are 429 rate_limited (or recipient_inbox_full) with Retry-After."
       requestBody:
         required: true
         content:
@@ -911,6 +936,60 @@ components:
           "$ref": "#/components/schemas/WireInt"
         signature:
           "$ref": "#/components/schemas/Signature"
+    Caip10Account:
+      type: string
+      pattern: "^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$"
+    CardRecord:
+      type: object
+      additionalProperties: false
+      description: "04-descriptor.md § Card record, action card-record, timestamp issuedAt, payload canonicalStateBytes(claims); canonical JSON at most 16384 bytes; no expiry"
+      required:
+        - aceId
+        - issuedAt
+        - home
+        - card
+        - contact
+        - listed
+        - signature
+      properties:
+        aceId:
+          "$ref": "#/components/schemas/AceId"
+        issuedAt:
+          "$ref": "#/components/schemas/WireInt"
+        home:
+          "$ref": "#/components/schemas/RelayUrl"
+        handle:
+          "$ref": "#/components/schemas/Handle"
+        card:
+          "$ref": "#/components/schemas/Card"
+        pay:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            "$ref": "#/components/schemas/Caip10Account"
+        contact:
+          type: string
+          enum:
+            - open
+            - closed
+        listed:
+          type: boolean
+        signature:
+          "$ref": "#/components/schemas/Signature"
+    CardBundle:
+      type: object
+      additionalProperties: false
+      description: Canonical JSON at most 1048576 bytes
+      required:
+        - kel
+        - card
+      properties:
+        kel:
+          "$ref": "#/components/schemas/Kel"
+        card:
+          "$ref": "#/components/schemas/CardRecord"
     Card:
       type: object
       additionalProperties: false
@@ -964,8 +1043,6 @@ components:
         - relays
         - prekey
         - profiles
-        - visibility
-        - card
         - signature
       properties:
         aceId:
@@ -1009,15 +1086,6 @@ components:
                 "$ref": "#/components/schemas/ProfileId"
               digest:
                 "$ref": "#/components/schemas/Hex64"
-        visibility:
-          type: string
-          enum:
-            - private
-            - public
-        handle:
-          "$ref": "#/components/schemas/Handle"
-        card:
-          "$ref": "#/components/schemas/Card"
         ext:
           type: object
           additionalProperties:

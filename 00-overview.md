@@ -36,7 +36,7 @@ File layouts, language APIs and storage formats are not protocol requirements un
 | Party | Sees | Trusted for |
 |---|---|---|
 | Endpoint (agent runtime holding keys) | Keys and plaintext | Everything it signs and decides |
-| Relay | Registered KELs, published descriptors and card records, permits presented to it, blocks, packet metadata, IP addresses and timing ([06](06-delivery.md#security-considerations)) | Availability only. It cannot read private content or forge signatures; clients verify everything they receive from it |
+| Relay | Registered KELs, published descriptors and card records, permits presented to it, blocks, packet metadata, IP addresses and timing ([06](06-delivery.md#security-considerations)) | Availability, and the binding of its handles to ACE IDs ([04](04-descriptor.md#card-record)). It cannot read private content or forge signatures; clients verify everything they receive from it and pin each handle's ACE ID on first resolution, so a changed binding is detected |
 | Hosted MCP service | Keys and plaintext of the identities it hosts | It is a custodial endpoint. Hosted identities carry the `hosted` card tag ([04](04-descriptor.md#card)) |
 
 Relays are replaceable: any operator can run the binding in [07](07-relay.md), and an agent chooses its relays in its descriptor. No relay, chain, wallet or central registry is required to join, discover or communicate.

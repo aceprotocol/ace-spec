@@ -2,7 +2,8 @@
 """Run the ACE interop matrix across driver executables (contract: README.md).
 
 Every directed pair (sender, receiver) of the selected SDKs, same-SDK pairs included, runs the
-cases below; exits non-zero on any mismatch. Standard library only.
+packet cases below, and every SDK verifies every SDK's card records (valid and tampered); exits
+non-zero on any mismatch. Standard library only.
 """
 
 from __future__ import annotations
@@ -44,11 +45,12 @@ WORK = Path(os.environ.get("WORK") or (Path(os.environ.get("TMPDIR", "/tmp")) / 
 ENV = {**os.environ, "PYTHONPATH": str(SDK_PY)}
 
 
-def run(lang: str, *args: str, now: int = NOW) -> None:
+def run(lang: str, *args: str, now: int = NOW) -> str:
     cmd = [*DRIVERS[lang], *args, "--now", str(now)]
     r = subprocess.run(cmd, env=ENV, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"{lang} {' '.join(args[:2])} failed ({r.returncode}):\n{r.stderr[-3000:]}")
+    return r.stdout
 
 
 def read(p: Path):
@@ -147,6 +149,62 @@ def run_pair(s: str, r: str) -> dict[str, str]:
     return cells
 
 
+RELAY = "https://relay.interop.test"
+# Identities with a handle (the matrix names them "<lang>-a"); "b" and "c" publish no handle.
+HANDLED = ("a",)
+
+
+def handle_of(lang: str, who: str) -> str | None:
+    return f"{lang}-{who}" if who in HANDLED else None
+
+
+def card_cases(lang: str, who: str) -> list[tuple[str, Path, dict]]:
+    """(case, card.json, expected verify-card result) for one generated identity's card record."""
+    d = WORK / lang / who
+    card = read(d / "card.json")
+    rec = card["card"]
+    expected = {"ok": True, "aceId": read(d / "agent.json")["descriptor"]["aceId"], "contact": "open", "listed": False}
+    if handle_of(lang, who):
+        expected["handle"] = handle_of(lang, who)
+    # The generated record itself must carry exactly what gen-identity was asked for.
+    want = {"home": RELAY, "card": {}, "contact": "open", "listed": False}
+    if handle_of(lang, who):
+        want["handle"] = handle_of(lang, who)
+    shape = {k: v for k, v in rec.items() if k not in ("aceId", "issuedAt", "signature")} == want and rec["issuedAt"] == NOW
+    if not shape:
+        expected = {"generated": "record does not match the gen-identity contract"}
+    cases = [("valid", d / "card.json", expected)]
+    bad = "invalid_authorization"
+    for name, mutate, code in [
+        ("tamper-signature", lambda c: c["card"]["signature"].__setitem__("value", flip_b64(c["card"]["signature"]["value"], 10)), bad),
+        ("tamper-listed", lambda c: c["card"].__setitem__("listed", True), bad),
+        ("tamper-contact", lambda c: c["card"].__setitem__("contact", "closed"), bad),
+        ("tamper-unknown-member", lambda c: c["card"].__setitem__("visibility", "public"), bad),
+        ("tamper-seq", lambda c: c["card"]["signature"].__setitem__("seq", c["card"]["signature"]["seq"] + 1), "stale_peer_binding"),
+    ]:
+        c = copy.deepcopy(card)
+        mutate(c)
+        path = WORK / "cards" / f"{lang}-{who}.{name}.json"
+        path.parent.mkdir(exist_ok=True)
+        write(path, c)
+        cases.append((name, path, {"error": code}))
+    return cases
+
+
+def run_cards(verifier: str, cases: list[tuple[str, str, str, Path, dict]]) -> dict[str, str]:
+    """Every card case verified by SDK ``verifier``: "<maker>-<who> <case>" -> "ok" or a failure."""
+    cells: dict[str, str] = {}
+    for maker, who, name, path, expected in cases:
+        key = f"{maker}-{who} {name}"
+        try:
+            got = json.loads(run(verifier, "verify-card", str(path)))
+        except (RuntimeError, ValueError) as exc:
+            cells[key] = f"FAIL {exc}"
+            continue
+        cells[key] = "ok" if got == expected else f"FAIL want {json.dumps(expected)}, got {json.dumps(got)[:200]}"
+    return cells
+
+
 def main() -> int:
     if WORK.exists():
         shutil.rmtree(WORK)
@@ -155,8 +213,11 @@ def main() -> int:
     # Three identities per SDK: "a" sends, "b" receives, "c" is a bystander whose identity a forger claims.
     # Each pair runs on its own copies of the identities (drivers may rewrite prekey state), so pairs run in parallel.
     with ThreadPoolExecutor() as pool:
-        list(pool.map(lambda lw: run(lw[0], "gen-identity", str(WORK / lw[0] / lw[1])),
+        list(pool.map(lambda lw: run(lw[0], "gen-identity", str(WORK / lw[0] / lw[1]),
+                                     *(["--handle", h] if (h := handle_of(*lw)) else [])),
                       [(lang, who) for lang in DRIVERS for who in ("a", "b", "c")]))
+        cards = [(lang, who, *case) for lang in DRIVERS for who in ("a", "b") for case in card_cases(lang, who)]
+        card_results = dict(zip(DRIVERS, pool.map(lambda v: run_cards(v, cards), DRIVERS)))
         pairs = [(s, r) for s in DRIVERS for r in DRIVERS]
         results = dict(zip(pairs, pool.map(lambda sr: run_pair(*sr), pairs)))
 
@@ -167,7 +228,14 @@ def main() -> int:
         print(f"{s:>5} -> {r:<5} {len(cells) - len(bad)}/{len(cells)} ok")
         for k, v in bad.items():
             print(f"        {k}: {v}")
-    print(f"cases per pair: {len({k for c in results.values() for k in c})}; pairs: {len(results)}; failures: {failed}")
+    for v, cells in card_results.items():
+        bad = {k: c for k, c in cells.items() if c != "ok"}
+        failed += len(bad)
+        print(f"verify-card {v:<5} {len(cells) - len(bad)}/{len(cells)} ok")
+        for k, c in bad.items():
+            print(f"        {k}: {c}")
+    print(f"cases per pair: {len({k for c in results.values() for k in c})}; pairs: {len(results)}; "
+          f"card cases per verifier: {len(cards)}; failures: {failed}")
     return 1 if failed else 0
 
 

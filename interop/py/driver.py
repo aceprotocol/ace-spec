@@ -17,12 +17,14 @@ from ace import (
     check_receipt_body,
     create_packet,
     create_permit,
+    create_card_record,
     create_published_agent,
     decode_content,
     decode_packet,
     decrypt_packet,
     encode_content,
     verify_packet,
+    verify_card_bundle,
     verify_kel,
     verify_permit,
     verify_published_agent,
@@ -53,7 +55,7 @@ def load(d: str, now: int):
     return identity, vault, read(os.path.join(d, "agent.json"))
 
 
-def gen_identity(d: str, now: int) -> None:
+def gen_identity(d: str, now: int, handle: str | None) -> None:
     os.makedirs(d, exist_ok=True)
     identity = SoftwareIdentity.generate(now=now)
     vault = PrekeyVault(os.path.join(d, "prekeys.json"))
@@ -67,6 +69,19 @@ def gen_identity(d: str, now: int) -> None:
     )
     write(os.path.join(d, "identity.json"), identity.export_private_key())
     write(os.path.join(d, "agent.json"), agent)
+    card = create_card_record(identity, home=RELAY, handle=handle, contact="open", listed=False, now=now)
+    write(os.path.join(d, "card.json"), card)
+
+
+def verify_card(path: str, now: int) -> dict:
+    try:
+        v = verify_card_bundle(read(path), now=now)
+    except ACEError as exc:
+        return {"error": exc.code}
+    out = {"ok": True, "aceId": v.ace_id, "contact": v.contact, "listed": v.listed}
+    if v.handle is not None:
+        out["handle"] = v.handle
+    return out
 
 
 def content_for(kind: str, a, identity, self_agent, peer: str, now: int) -> dict:
@@ -146,18 +161,20 @@ def open_(d: str, a, now: int) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["gen-identity", "create-packet", "open-packet"])
+    ap.add_argument("command", choices=["gen-identity", "create-packet", "open-packet", "verify-card"])
     ap.add_argument("dir")
     ap.add_argument("--now", type=int, default=os.environ.get("ACE_INTEROP_NOW"))
     for o in ("to-agent", "prekey-agent", "kind", "out", "message", "message-id", "ref-message-id",
-              "ref-prekey", "code", "note", "from-agent", "packet"):
+              "ref-prekey", "code", "note", "from-agent", "packet", "handle"):
         ap.add_argument("--" + o)
     a = ap.parse_args()
     if a.now is None:
         raise SystemExit("--now is required")
     now = int(a.now)
     if a.command == "gen-identity":
-        gen_identity(a.dir, now)
+        gen_identity(a.dir, now, a.handle)
+    elif a.command == "verify-card":
+        print(json.dumps(verify_card(a.dir, now)))
     elif a.command == "create-packet":
         create(a.dir, a, now)
     else:

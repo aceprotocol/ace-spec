@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Live cross-SDK interop matrix (packets, receipts, contact requests). See README.md.
+# Live cross-SDK interop matrix (packets, receipts, contact requests, card records). See README.md.
 #   INTEROP_LANGS=ts,py[,swift]  ACE_INTEROP_SWIFT=/path/to/driver  SKIP_BUILD=1  WORK=/tmp/dir
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

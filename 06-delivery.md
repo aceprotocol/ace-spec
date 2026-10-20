@@ -86,7 +86,7 @@ An SDK reports every failure as one error type carrying a `code`, whose category
 
 | Category | Codes |
 |---|---|
-| `permanent` | `invalid_argument`, `invalid_packet`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `stale_timestamp`, `stale_peer_binding`, `decryption_failed`, `unknown_prekey`, `unsupported_schema`, `invalid_body`, `replay_horizon`, `invalid_kel`, `kel_conflict`, `unknown_peer`, `not_registered`, `not_permitted`, `relay_rejected`, `blocked_address`, `delivery_rejected`, `expired` |
+| `permanent` | `invalid_argument`, `invalid_packet`, `unsupported_version`, `wrong_recipient`, `invalid_signature`, `invalid_authorization`, `stale_timestamp`, `stale_peer_binding`, `decryption_failed`, `unknown_prekey`, `unsupported_schema`, `invalid_body`, `replay_horizon`, `invalid_kel`, `kel_conflict`, `unknown_peer`, `not_registered`, `not_permitted`, `relay_rejected`, `blocked_address`, `delivery_rejected`, `expired`, `stale_descriptor` |
 | `transient` | `relay_unavailable`, `relay_protocol_error`, `fetch_failed` |
 | `local` | `storage_failed`, `identity_unavailable`, `lock_busy`, `receiver_capacity`, `thread_busy` |
 

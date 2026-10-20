@@ -26,6 +26,7 @@ Only padded standard Base64 (RFC 4648 §4) is accepted: no whitespace, no URL-sa
 | Namespaced identifier (profile ID, message type) | ASCII, at most `MAX_TYPE_BYTES` bytes, `^[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$`. Opaque: parsing MUST NOT fetch a URI or execute code. The prefix `ace:` is reserved for this specification |
 | Thread ID | 1..`MAX_THREAD_ID_LENGTH` code points, none in U+0000–U+001F or U+007F |
 | Handle | `^[a-z][a-z0-9_-]{2,31}$` |
+| CAIP-10 account | `^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$` (`namespace:reference:address`) |
 | Stream ID | `^[0-9]{1,20}-[0-9]{1,20}$` (`<ms>-<seq>`), compared as the integer pair |
 | Error or outcome code | `^[a-z0-9_]{1,64}$` |
 
@@ -56,7 +57,7 @@ A **canonical relay URL** is an `https` URL of at most 2048 characters that equa
 
 Received JSON is accepted only if it is valid UTF-8 (invalid sequences are rejected, not replaced), parses under RFC 8259, contains no non-finite number (including literals such as `1e400` that overflow), and respects the depth bound below. Senders apply the same rules before serializing. Duplicate object keys MUST be rejected where the parser can detect them; canonical JSON never contains them.
 
-**Depth.** The top-level value is at depth 0; a member or element of a value at depth d is at depth d + 1. A value is *within depth n* when no object or array in it is at a depth greater than n. Each protocol object — a packet, private content, a PublishedAgent, a permit, a registration request — MUST be within `MAX_JSON_DEPTH`, measured from its own top-level value; its parts (a descriptor's `ext`, a content `body`) are bounded through it. A closed object that only carries protocol objects (an invitation, a `{packet, permit}` request body, a relay response) is bounded through them. A relay refuses an input protocol object deeper than this with that object's validation error. A client parses a relay response or SSE `data` as a whole within `MAX_JSON_DEPTH + 3` (the deepest wrapper: an inbox page holds its packets at depth 3), then checks each contained packet and PublishedAgent within `MAX_JSON_DEPTH`; either failure is `relay_protocol_error` for that whole response.
+**Depth.** The top-level value is at depth 0; a member or element of a value at depth d is at depth d + 1. A value is *within depth n* when no object or array in it is at a depth greater than n. Each protocol object — a packet, private content, a PublishedAgent, a CardBundle, a permit, a registration request — MUST be within `MAX_JSON_DEPTH`, measured from its own top-level value; its parts (a descriptor's `ext`, a content `body`) are bounded through it. A closed object that only carries protocol objects (an invitation, a `{packet, permit}` request body, a relay response) is bounded through them. A relay refuses an input protocol object deeper than this with that object's validation error. A client parses a relay response or SSE `data` as a whole within `MAX_JSON_DEPTH + 3` (the deepest wrapper: an inbox page holds its packets at depth 3), then checks each contained packet, PublishedAgent and CardBundle within `MAX_JSON_DEPTH`; either failure is `relay_protocol_error` for that whole response.
 
 ### Canonical JSON
 
@@ -104,6 +105,7 @@ The complete list. `aceId` and `timestamp` are the inputs of `M`.
 | `agent-descriptor` | Descriptor | `aceId`, `issuedAt` | `canonicalStateBytes(claims)` | [04](04-descriptor.md) |
 | `delegation` | Delegation credential | `issuer`, `issuedAt` | `canonicalStateBytes(claims)` | [04](04-descriptor.md#delegations) |
 | `delivery-permit` | Delivery permit | `issuer`, `issuedAt` | `canonicalStateBytes(claims)` | [05](05-admission.md#delivery-permits) |
+| `card-record` | Card record | `aceId`, `issuedAt` | `canonicalStateBytes(claims)` | [04](04-descriptor.md#card-record) |
 | `register-request` | `POST /v1/register` body | `aceId`, `timestamp` | `encodePayload(lastHashHex, audience)` | [07](07-relay.md#registration) |
 | `listen` | `GET /v1/listen` | auth headers | `encodePayload(sinceOrDash)` | [07](07-relay.md#authentication) |
 | `inbox` | `GET /v1/inbox` | auth headers | `encodePayload(sinceOrDash, decimal(limit))` | [07](07-relay.md#inbox) |
@@ -125,18 +127,20 @@ Normative values used by every implementation and relay.
 | `MAX_PLAINTEXT_BYTES` | 1179648 | Canonical private content (1 MiB + 128 KiB) |
 | `MAX_PACKET_BYTES` | 2097152 | Canonical JSON of a packet |
 | `MAX_SEND_BODY_BYTES` | 2162688 | Body of `POST /v1/send` (`MAX_PACKET_BYTES + 65536`) |
-| `MAX_PUBLISHED_AGENT_BYTES` | 1048576 | Canonical JSON of a PublishedAgent; also bounds a registration request |
+| `MAX_PUBLISHED_AGENT_BYTES` | 1048576 | Canonical JSON of a PublishedAgent; also bounds a registration request and a CardBundle |
+| `MAX_CARD_RECORD_BYTES` | 16384 | Canonical JSON of a card record |
 | `MAX_JSON_DEPTH` | 32 | Depth of each protocol object ([§ JSON values](#json-values)) |
 | `MAX_TYPE_BYTES` | 256 | Namespaced identifier |
 | `MAX_THREAD_ID_LENGTH` | 256 | Thread ID code points |
 | `MAX_KEL_EVENTS` | 256 | Events per KEL |
 | `MAX_SIGNING_KEY_LIFETIME` | 31622400 | `notAfter - ts` of a `dlg` signing key |
-| `MAX_DESCRIPTOR_LIFETIME` | 86400 | `expiresAt - issuedAt` of a descriptor |
+| `MAX_DESCRIPTOR_LIFETIME` | 604800 | `expiresAt - issuedAt` of a descriptor |
 | `MAX_DELEGATION_LIFETIME` | 604800 | `expiresAt - issuedAt` of a delegation credential |
 | `MAX_PERMIT_LIFETIME` | 2592000 | `expiresAt - issuedAt` of a delivery permit |
 | `PERMIT_RENEWAL_SECONDS` | 1296000 | Remaining permit lifetime below which a receipt carries a renewal |
 | `MAX_RETAINED_PREKEYS` | 16 | Superseded prekey seeds an endpoint retains |
 | `MAX_EXT_BYTES` | 4096 | Canonical JSON of a descriptor `ext` |
+| `MAX_PAY_ACCOUNTS` | 8 | Entries of a card record `pay` |
 | `MAX_NOTE_BYTES` | 512 | UTF-8 bytes of a contact `note` |
 | `MAX_INBOX_PAGE` | 100 | Maximum `limit` of inbox and directory pages; default inbox `limit` |
 | `DEFAULT_PAGE_LIMIT` | 20 | Default `limit` of directory pages |
@@ -150,6 +154,7 @@ Normative values used by every implementation and relay.
 | `STRANGER_NETWORK_ALLOWANCE` | 2 | Queued stranger entries per client network per recipient at a relay |
 | `CLIENT_NETWORK_PREFIX_IPV4` | 24 | Prefix length of an IPv4 client network ([07](07-relay.md#client-networks)) |
 | `CLIENT_NETWORK_PREFIX_IPV6` | 56 | Prefix length of an IPv6 client network |
+| `HANDLE_CLAIMS_PER_NETWORK_PER_DAY` | 8 | New handles a relay lets one client network claim per 86400 seconds ([07](07-relay.md#descriptors-and-cards)) |
 | `MIN_BLOCK_CAP` | 256 | Least number of tracked block peers per identity a relay may cap at |
 | `PIN_REFRESH_INTERVAL_SECONDS` | 30 | Minimum interval between pin refreshes of one sender in the receive pipeline |
 | `MAX_FETCH_ATTEMPTS` | 3 | Fetches of one inbox entry without a final disposition before it is quarantined |

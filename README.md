@@ -12,7 +12,7 @@ Protocol version `1` (packet `ace: "1"`, signature domain `ace.v1`). Signatures 
 | [01 Identity](01-identity.md) | KEL, signing delegation, usability, pinning, forks, recovery |
 | [02 Encoding](02-encoding.md) | Wire integers, Base64, identifiers, URLs, canonical JSON, signatures, signing actions, constants |
 | [03 Packet](03-packet.md) | Packet format, prekey encryption, header binding, private content |
-| [04 Descriptor](04-descriptor.md) | PublishedAgent, prekeys, visibility and handles, card, extensions, delegations, ERC-8004 |
+| [04 Descriptor](04-descriptor.md) | PublishedAgent, prekeys, card record and handles, card, extensions, delegations, ERC-8004 |
 | [05 Admission](05-admission.md) | Delivery permits, contact requests, blocks, receiver admission |
 | [06 Delivery](06-delivery.md) | Outbox, receipts, receive pipeline, deduplication, error codes, security considerations |
 | [07 Relay](07-relay.md) | HTTP binding, authentication, errors, client rules |

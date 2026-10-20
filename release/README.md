@@ -62,7 +62,7 @@ Run each repository's suite on its declared runtime (relay/MCP/CLI document thei
 
 ```sh
 python3 scripts/check-sdk-artifacts.py --sdk-ts ../sdk-ts --sdk-py ../sdk-py --sdk-swift ../sdk-swift
-bash interop/run.sh            # TS/Py packet, receipt and contact matrix; ACE_INTEROP_SWIFT adds Swift
+bash interop/run.sh            # TS/Py packet, receipt, contact and card record matrix; ACE_INTEROP_SWIFT adds Swift
 ```
 
 and the website generator in `--check` mode. Relay and MCP workflows pin full spec/SDK commits (`SDK_TS_SHA`, `ACE_SPEC_SHA`) and vendor the SDK tarball into the image build (`scripts/vendor-local-deps.sh`). Checksums detect artifact mismatch; they are not signatures or a security audit. A locally passing release candidate implies no published deployment.

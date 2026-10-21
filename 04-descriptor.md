@@ -24,10 +24,10 @@ A verifier checks a PublishedAgent at one clock reading `now`, in this order; th
 
 1. Shape: the closed objects and field rules above, including `ext`, `delegations` and `erc8004` shapes (`invalid_authorization`).
 2. `kel` verifies and is usable at `now` ([01](01-identity.md#verifier-rules); `invalid_kel` / `invalid_signature`); `aceId` equals its ACE ID (`invalid_authorization`).
-3. The signature verifies as an operational signature of that KEL ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
+3. The signature verifies as an operational signature of that KEL, where signed while live also requires `issuedAt` to be at or after the `ts` of the delegating `dlg` ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
 4. Each delegation entry verifies ([§ Delegations](#delegations)). An entry that fails only because it has expired is dropped from the verifier's view; any other failure is `invalid_authorization`.
 
-Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Directory and lookup results are always complete signed PublishedAgents; a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true.
+Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Directory and lookup results are always complete signed PublishedAgents; a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true. A signer sets the `issuedAt` of a descriptor or card record to `max(now, ts of its last KEL event, issuedAt of its previous one + 1)`.
 
 ## Caching
 
@@ -67,7 +67,7 @@ A verifier checks a CardBundle at one clock reading `now`, in this order; the fi
 
 1. Shape: the closed objects and field rules above, including both size bounds (`invalid_authorization`).
 2. `kel` verifies and is usable at `now` ([01](01-identity.md#verifier-rules); `invalid_kel` / `invalid_signature`); `aceId` equals its ACE ID (`invalid_authorization`).
-3. The signature verifies as an operational signature of that KEL ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
+3. The signature verifies as an operational signature of that KEL, with `issuedAt` at or after the `ts` of the delegating `dlg` ([§ Verification](#verification) step 3; `stale_peer_binding` / `invalid_authorization`).
 
 A card record does not expire: it stands until a newer `issuedAt` replaces it or the identity unregisters. A record signed under a superseded delegation fails step 3, so an agent re-signs its record after every `dlg`. A verified record proves who asserted it, not that it is true: a `pay` account is claimed, not proven to be controlled by the agent. An agent without a card record is treated as `contact: closed` and unlisted.
 

@@ -262,7 +262,7 @@ URLS = [
     ("HTTPS://example.com", False), ("http://example.com", False), ("https://user@example.com", False),
     ("https://[::1]/", False), ("https://example.com:0", False), ("https://example.com:65536", False),
     ("https://example.com:", False), ("https://exa mple.com", False), ("https://example.com.", False),
-    ("https://-example.com", False), ("https://", False), ("https://exämple.com", False), ("https://example.com/\n", False),
+    ("https://-example.com", False), ("https://a..b", False), ("https://a-.example", False), ("https://", False), ("https://exämple.com", False), ("https://example.com/\n", False),
     ("https://example.com\\path", False), ("https://example.com/\"q\"", False),
     ("https://" + ".".join(["a" * 63] * 3 + ["a" * 61]), True), ("https://" + ".".join(["a" * 63] * 4) + "/", False),
     ("https://example.com/" + "a" * (2048 - 20), True), ("https://example.com/" + "a" * (2049 - 20), False),
@@ -283,6 +283,12 @@ RELAY_URLS = [
     ("https://relay.example.com:0", None), ("https://relay.example.com:0443", None), ("https://rélay.example.com", None),
     ("https://relay_1.example.com", None), ("http://[::g]", None), ("http://[fe80::1%25en0]/", None),
 ]
+# 02 step 3 admits these hosts, so they normalize; they are not canonical relay URLs (the ACE HTTPS URL grammar's host
+# has no IP literal, empty label, edge hyphen or trailing dot), so descriptor relays and card home reject them (SP11).
+NON_CANONICAL_HOSTS = ["https://[::1]", "https://a..b", "https://-a.example", "https://a-.example", "https://example.com."]
+RELAY_URLS += [(u, u) for u in NON_CANONICAL_HOSTS]
+for u in NON_CANONICAL_HOSTS:
+    assert not is_canonical_relay_url(u, allow_loopback=True), u
 relay_url_cases = []
 for u, norm in RELAY_URLS:
     if norm is None:
@@ -820,6 +826,8 @@ field("relay with an uppercase host", relays=["https://Relay.example"])
 field("relay over http", relays=["http://relay.example"])
 field("loopback http relay (development only)", relays=["http://127.0.0.1:8080"])
 field("relay with a query", relays=[RELAY + "?a=1"])
+for _u in NON_CANONICAL_HOSTS:
+    field(f"relay {_u} (normalized but not a canonical relay URL host)", relays=[_u])
 field("prekey id is not SHA-256 of the key", prekey={**ALICE_PREKEY, "id": "0" * 64})
 field("prekey of 1215 bytes", prekey={"id": hashlib.sha256(bytes(1215)).hexdigest(), "publicKey": b64(bytes(1215))})
 field("prekey with an extra member", prekey={**ALICE_PREKEY, "x": 1})
@@ -888,6 +896,45 @@ for name, pa, code in [
     desc_pinned.append({"name": name, "publishedAgent": pa, "pinned": "bob", "now": NOW, "error": code})
 # the attack only works without the pin:
 assert outcome(lambda: verify_published_agent(desc_pinned[0]["publishedAgent"], now=NOW)) is None
+
+# 04 § Verification step 3 (SP12): signed while live also requires issuedAt >= the ts of the dlg its signature seq names.
+# Fork recovery that re-delegates the same key at the same seq: the superseded branch FORK_OLD = icp, dlg(seq 1), dlg(seq 2,
+# key K, T0 + 5); the holder of the next root recovers with FORK_NEW = icp, rot(seq 1, T0 + 20), dlg(seq 2, key K, T0 + 20),
+# which supersedes FORK_OLD (01 rule 6). A document signed with K at seq 2 on the old branch (issuedAt T0 + 10) carries a
+# signature that also verifies under FORK_NEW's seq 2: only the issuedAt bound rejects its replay.
+def make_fork():
+    r1, r2, r3 = key("fork-root"), key("fork-next"), key("fork-next-2")
+    s1, k = key("fork-signing-1"), key("fork-signing")
+    icp = create_inception(r1, key_digest(r2.scheme, r2.public_key()), T0)
+    d1 = create_signing_delegation(verify_kel([icp], T0), r1, s1.public_key(), T0)
+    d2 = create_signing_delegation(verify_kel([icp, d1], T0 + 5), r1, k.public_key(), T0 + 5)
+    rot = create_rotation(verify_kel([icp], T0 + 20), r2, key_digest(r3.scheme, r3.public_key()), T0 + 20)
+    d2b = create_signing_delegation(verify_kel([icp, rot], T0 + 20), r2, k.public_key(), T0 + 20)
+    old, new = Agent("fork-old", r1, r2, k, [icp, d1, d2]), Agent("fork-new", r2, r3, k, [icp, rot, d2b])
+    assert old.id == new.id and old.seq == new.seq == 2
+    assert extend_kel(old.state, new.kel, NOW)[1] == "recovered"  # 01 rule 6
+    return old, new
+
+
+FORK_OLD, FORK_NEW = make_fork()
+BOB_DLG_TS = bob.kel[3]["ts"]  # bob's current dlg (seq 3), T0 + 10
+assert BOB_DLG_TS == T0 + 10
+_bob_min = {**_min, "aceId": bob.id}
+_fork_min = {**_min, "aceId": FORK_NEW.id}
+_fork_replayed = signed("agent-descriptor", {**_fork_min, "issuedAt": T0 + 10}, FORK_OLD)
+_issued_valid = [
+    ("issuedAt equal to the ts of the delegating dlg (bob, seq 3)", published({**_bob_min, "issuedAt": BOB_DLG_TS}, signer=bob)),
+    ("fork recovery: issuedAt equal to the ts of the re-delegating dlg", published({**_fork_min, "issuedAt": T0 + 20}, signer=FORK_NEW)),
+    ("fork recovery: the old branch's document under the old branch's own KEL (no pin: still valid)",
+     {"kel": FORK_OLD.kel, "descriptor": _fork_replayed}),
+]
+for name, pa in _issued_valid:
+    assert verify_published_agent(pa, now=NOW).delegations == (), name
+    desc_valid.append({"name": name, "publishedAgent": pa, "now": NOW, "delegations": []})
+bad_desc("issuedAt one second before the ts of the delegating dlg (bob, seq 3): stale_peer_binding",
+         published({**_bob_min, "issuedAt": BOB_DLG_TS - 1}, signer=bob), "stale_peer_binding")
+bad_desc("fork recovery: the superseded branch's document (same seq, same key, issuedAt before the re-delegating dlg) replayed "
+         "under the recovered KEL: stale_peer_binding", {"kel": FORK_NEW.kel, "descriptor": _fork_replayed}, "stale_peer_binding")
 
 descriptor = {
     "rules": (
@@ -1097,6 +1144,8 @@ card_field("home with an uppercase host", home="https://Relay.interop.test")
 card_field("home over http", home="http://relay.interop.test")
 card_field("loopback http home (development only)", home="http://127.0.0.1:8080")
 card_field("handle with a home that has a path", home="https://relay.example:8443/ace")
+for _u in NON_CANONICAL_HOSTS:
+    card_field(f"home {_u} (normalized but not a canonical relay URL host)", home=_u)
 card_field("handle grammar", handle="Al")
 card_field("handle of 33 characters", handle="a" * 33)
 card_field("9 pay accounts", pay=[f"eip155:1:0x{i:040x}" for i in range(9)])
@@ -1119,6 +1168,19 @@ bad_card("signed with a superseded delegation seq", card_bundle({**CARD_BASE, "a
 bad_card("kel not usable at now (carol, now >= notAfter)", card_bundle({**CARD_BASE, "aceId": carol.id}, signer=carol), "invalid_kel",
          now=NOW + 100)
 bad_card("kel does not verify", card_bundle(CARD_BASE, kel=_badkel), "invalid_signature")
+# 04 § Card record verification step 3 (SP12): issuedAt at or after the ts of the delegating dlg.
+_card_nh = {k: v for k, v in CARD_BASE.items() if k != "handle"}
+good_card("issuedAt equal to the ts of the delegating dlg (bob, seq 3)",
+          card_bundle({**_card_nh, "aceId": bob.id, "issuedAt": BOB_DLG_TS}, signer=bob))
+good_card("fork recovery: issuedAt equal to the ts of the re-delegating dlg",
+          card_bundle({**_card_nh, "aceId": FORK_NEW.id, "issuedAt": T0 + 20}, signer=FORK_NEW))
+_fork_card = signed("card-record", {**_card_nh, "aceId": FORK_NEW.id, "issuedAt": T0 + 10}, FORK_OLD)
+good_card("fork recovery: the old branch's record under the old branch's own KEL (no pin: still valid)",
+          {"kel": FORK_OLD.kel, "card": _fork_card})
+bad_card("issuedAt one second before the ts of the delegating dlg (bob, seq 3): stale_peer_binding",
+         card_bundle({**_card_nh, "aceId": bob.id, "issuedAt": BOB_DLG_TS - 1}, signer=bob), "stale_peer_binding")
+bad_card("fork recovery: the superseded branch's record (same seq, same key, issuedAt before the re-delegating dlg) replayed "
+         "under the recovered KEL: stale_peer_binding", {"kel": FORK_NEW.kel, "card": _fork_card}, "stale_peer_binding")
 card_records = {
     "rules": (
         "verifyCardBundle(bundle, now) with production settings (no loopback relays). valid: succeeds and the record's "
@@ -1554,6 +1616,12 @@ def contact_packet(n: int, ts: int) -> dict:
     return manual_packet(alice, bob.id, BOB_PREKEY, content, ts, mid_=mid(n))
 
 
+def receipt_packet(n: int, ts: int, about: str) -> dict:
+    """A receipt from alice to bob for bob's message ``about``."""
+    content = {"type": "ace:receipt:1", "schemaDigest": D["ace:receipt:1"], "body": {"messageId": about, "outcome": "delivered"}}
+    return manual_packet(alice, bob.id, BOB_PREKEY, content, ts, mid_=mid(n))
+
+
 def receipt_of(out) -> str | None:
     """The outcome of the receipt the receiver sends, read back by decrypting it."""
     if out.receipt is None:
@@ -1610,6 +1678,11 @@ pipeline_cases = [
         (text_packet(carol, 911, NOW + 50), NOW + 60, X("delivered", receipt="delivered")),
         (text_packet(carol, 910, NOW + 50), NOW + 150, X("drop", "stale_peer_binding")),
     ], pinned=[(carol, CAROL_PA)]),
+    pipeline_case("a replayed receipt is a duplicate (deduplicated at step 9, applied once) and is never receipted", [
+        (_r1 := receipt_packet(930, NOW - 5, PKT_MID), NOW, X("delivered")),
+        (_r1, NOW + 1, X("duplicate")),
+        (receipt_packet(931, NOW - 4, PKT_MID), NOW + 2, X("delivered")),
+    ], pinned=[(alice, BASE_PA)]),
 ]
 pipeline = {
     "rules": (
@@ -1618,7 +1691,8 @@ pipeline = {
         "capacity 'capacity', and which has pinned and admitted each 'admitted' PublishedAgent (verified at the vectors' "
         "'now'). Run the steps in order, each at clock 'now': processing 'packet' ends in 'disposition' (delivered, "
         "duplicate, drop or reject) with record code 'code' (null on success), and the receiver sends a receipt whose "
-        "outcome is 'receipt', or none (null). Contact requests are never receipted; a packet beyond the replay horizon "
+        "outcome is 'receipt', or none (null). Receipts and contact requests are never receipted (a replayed receipt is a "
+        "duplicate like any packet); a packet beyond the replay horizon "
         "is dropped with record code replay_horizon and no receipt."
     ),
     "cases": pipeline_cases,
@@ -1885,7 +1959,7 @@ assert contract["profiles"] == {o["id"]: o["digest"] for o in official}
 
 vectors = {
     "version": 10,
-    "description": "ACE shared conformance vectors (2026-10-20 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
+    "description": "ACE shared conformance vectors (2026-10-21 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
     "now": NOW,
     "agents": {a.name: {"aceId": a.id, "export": a.export(), **({"supersededSigningSeeds": {"1": b64(bob.extra_signing[1].seed)}} if a is bob else {})}
                for a in AGENTS.values()},

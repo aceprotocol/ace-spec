@@ -82,7 +82,7 @@ paths:
   "/v1/descriptor":
     post:
       summary: "Publish the caller's PublishedAgent"
-      description: "Authenticated by the descriptor signature; kel must equal the registered KEL."
+      description: "Authenticated by the descriptor signature; kel must equal the registered KEL and relays must include this relay's public URL (400 invalid_argument)."
       x-ace-action: agent-descriptor
       requestBody:
         required: true
@@ -114,7 +114,7 @@ paths:
   "/v1/descriptor/{aceId}":
     get:
       summary: Look up a descriptor
-      description: "The unexpired PublishedAgent of any registered identity; unknown_peer otherwise."
+      description: "The unexpired PublishedAgent of any registered identity, stored under its current registered KEL; unknown_peer otherwise."
       parameters:
         - name: aceId
           in: path
@@ -318,7 +318,7 @@ paths:
   "/v1/send":
     post:
       summary: Queue a packet for a registered recipient
-      description: "Body at most 2162688 bytes. A blocked sender is refused before any permit or stranger check. With a permit: issuer = to, subject = from, verified against the recipient's KEL at now. Without: the recipient must have a stored card record with contact open and an unexpired descriptor (stranger allowance: 16 entries per recipient, 2 per client network). The relay does not verify the packet signature. Every refusal of the recipient (unknown, closed, blocking, bad permit) is 403 not_permitted with one message; byte and rate budgets are 429 rate_limited (or recipient_inbox_full) with Retry-After."
+      description: "Body at most 2162688 bytes. An unregistered or blocking recipient is refused before the duplicate check and any permit or stranger check. With a permit: issuer = to, subject = from, verified against the recipient's KEL at now. Without: the recipient must have a stored card record with contact open and an unexpired descriptor (stranger allowance: 16 entries per recipient, 2 per client network). The relay does not verify the packet signature. Every refusal of the recipient (unknown, closed, blocking, bad permit) is 403 not_permitted with one message; byte and rate budgets are 429 rate_limited (or recipient_inbox_full) with Retry-After."
       requestBody:
         required: true
         content:
@@ -1075,6 +1075,7 @@ components:
         profiles:
           type: array
           maxItems: 32
+          description: "Distinct ids; ace:core:1 is never listed"
           items:
             type: object
             additionalProperties: false

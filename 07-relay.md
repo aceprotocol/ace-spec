@@ -87,7 +87,7 @@ An identity therefore holds at most one handle, and a handle is never reassigned
 | `GET /v1/card/{aceId}` | the stored CardBundle of a registered identity | `unknown_peer` |
 | `GET /v1/handles/{handle}` | the stored CardBundle of the identity the handle is bound to, when that record's `home` is this relay | `unknown_peer` |
 
-A relay treats a stored card record whose `kel` is not the identity's current registered KEL as absent. Clients check a resolved handle as [04](04-descriptor.md#card-record) states.
+A relay treats a stored descriptor or card record whose `kel` is not the identity's current registered KEL as absent (`unknown_peer`). Clients check a resolved handle as [04](04-descriptor.md#card-record) states.
 
 `GET /v1/descriptors` is the public directory: the unexpired PublishedAgents of identities whose stored card record is `listed: true`, has `home` equal to this relay's public URL, ordered by ACE ID, optionally only those listing the exact profile ID `profile`. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`.
 
@@ -100,8 +100,8 @@ A relay treats a stored card record whose `kel` is not the identity's current re
 `POST /v1/send` takes the closed `{packet, permit?}`, at most `MAX_SEND_BODY_BYTES` bytes. The relay does not verify the packet signature and needs no sender KEL; the receiver verifies. In order:
 
 1. The packet decodes ([03](03-packet.md#decoding); `invalid_packet`, `unsupported_version`) and `now - OFFLINE_WINDOW_SECONDS <= timestamp <= now + TIMESTAMP_WINDOW_SECONDS` (`stale_timestamp`).
-2. A byte-identical packet already queued for a registered `to` returns `{ok:true}` without enqueuing.
-3. `to` is registered here and has not blocked `from` (`not_permitted`).
+2. `to` is registered here and has not blocked `from` (`not_permitted`).
+3. A byte-identical packet already queued for `to` returns `{ok:true}` without enqueuing.
 4. **With a permit:** the permit's `issuer` is `to`, its `subject` is `from`, it verifies as an operational signature of `to`'s registered KEL at `now` ([01](01-identity.md#operational-signatures)) and is valid (`not_permitted`). The packet enters the normal queue, retained `OFFLINE_WINDOW_SECONDS` and bounded per recipient in bytes and entries (`recipient_inbox_full`).
 5. **Without a permit:** `to` has a stored card record here with `contact: open` and an unexpired descriptor (`not_permitted`). The packet enters the stranger allowance: at most `STRANGER_ALLOWANCE` entries per recipient, of which a relay MUST accept at most `STRANGER_NETWORK_ALLOWANCE` from one client network (`recipient_inbox_full`), each retained `CONTACT_REQUEST_TTL_SECONDS`, and rate-limited per client network and per recipient (`rate_limited`).
 
@@ -131,7 +131,7 @@ data: {"packet": <packet>}
 
 Optional: a relay that does not offer them answers both routes with `404 not_found`. A wake tells a gateway the recipient chose that its queue has entries, so that a suspended endpoint can be woken to fetch them; it carries no content, ACE ID or count. Endpoints MUST NOT depend on wakes: delivery is defined by [§ Inbox](#inbox) and [§ Listen](#listen) alone.
 
-`PUT /v1/wake` (action `wake`, payload `encodePayload(gateway, token)`) takes the closed `{gateway, token}` and replaces the caller's registration; `DELETE /v1/wake` (action `wake`, empty payload) removes it. Both are idempotent. `gateway` is a canonical relay URL ([02](02-encoding.md#relay-urls)) and `token` matches `^[A-Za-z0-9_-]{22,512}$` (`invalid_argument`). The gateway issues the token: an unguessable value (at least 128 random bits) that it maps to the devices to wake. A relay MAY accept only gateways its operator lists (`invalid_argument`). An identity has at most one registration; its stored bytes are charged as [§ Registration](#registration) states. Unregistering deletes it, and it expires `OFFLINE_WINDOW_SECONDS` after the identity's last authenticated `wake`, `inbox`, `inbox-ack` or `listen` request.
+`PUT /v1/wake` (action `wake`, payload `encodePayload(gateway, token)`) takes the closed `{gateway, token}` and replaces the caller's registration; `DELETE /v1/wake` (action `wake`, empty payload) removes it. Both are idempotent. `gateway` is a canonical relay URL ([02](02-encoding.md#relay-urls)) and `token` matches `^[A-Za-z0-9_-]{22,512}$` (`invalid_argument`). The gateway issues the token: an unguessable value (at least 128 random bits) that it maps to the devices to wake. A relay SHOULD accept only gateways its operator lists (`invalid_argument`). An identity has at most one registration; its stored bytes are charged as [§ Registration](#registration) states. Unregistering deletes it, and it expires `OFFLINE_WINDOW_SECONDS` after the identity's last authenticated `wake`, `inbox`, `inbox-ack` or `listen` request.
 
 **Arming.** Storing a registration arms it, and every authenticated `inbox`, `inbox-ack` or `listen` request of the identity re-arms it. When an entry is queued for an identity whose registration is armed and that has no open listen stream, the relay disarms it and sends one wake, so one wake covers every entry queued until the endpoint next fetches or acknowledges. A relay MAY defer a wake to keep a minimum interval between wakes of one identity; it defers it rather than dropping it.
 

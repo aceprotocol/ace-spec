@@ -218,11 +218,17 @@ paths:
           "$ref": "#/components/responses/TooManyRequests"
         "500":
           "$ref": "#/components/responses/Error"
-  "/v1/descriptors":
+  "/v1/cards":
     get:
       summary: Public directory
-      description: "Unexpired PublishedAgents of identities whose stored card record is listed: true, names this relay as home, ordered by ACE ID (a record under a superseded KEL is absent)."
+      description: "07 § Descriptors and cards. Stored CardBundles of identities whose card record is listed: true and names this relay as home, and whose descriptor is unexpired, ordered by ACE ID (a record under a superseded KEL is absent). tag: an exact tag the card lists; profile: an exact profile ID the stored descriptor lists (a hint). A page is at most MAX_PAGE_BYTES."
       parameters:
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[a-z0-9-]{1,32}$"
         - name: profile
           in: query
           required: false
@@ -250,13 +256,13 @@ paths:
               schema:
                 type: object
                 required:
-                  - agents
+                  - cards
                   - cursor
                 properties:
-                  agents:
+                  cards:
                     type: array
                     items:
-                      "$ref": "#/components/schemas/PublishedAgent"
+                      "$ref": "#/components/schemas/CardBundle"
                   cursor:
                     type:
                       - string
@@ -651,7 +657,9 @@ components:
       pattern: "^(0|[1-9][0-9]{0,15})$"
     Handle:
       type: string
-      pattern: "^[a-z][a-z0-9_-]{2,31}$"
+      minLength: 3
+      maxLength: 32
+      pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
     RootScheme:
       description: "Signing scheme of a KEL root (and of the KEL event signatures it makes)"
       type: string
@@ -995,10 +1003,6 @@ components:
       additionalProperties: false
       required: []
       properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 64
         description:
           type: string
           maxLength: 256

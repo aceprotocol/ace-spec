@@ -25,7 +25,7 @@ Only padded standard Base64 (RFC 4648 §4) is accepted: no whitespace, no URL-sa
 | Hex digest | `^[0-9a-f]{64}$` (prekey ID, `schemaDigest`, profile `digest`, `prev`, `next`) |
 | Namespaced identifier (profile ID, message type) | ASCII, at most `MAX_TYPE_BYTES` bytes, `^[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$`. Opaque: parsing MUST NOT fetch a URI or execute code. The prefix `ace:` is reserved for this specification |
 | Thread ID | 1..`MAX_THREAD_ID_LENGTH` code points, none in U+0000–U+001F or U+007F |
-| Handle | `^[a-z][a-z0-9_-]{2,31}$` |
+| Handle | `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, 3–32 characters (hence a DNS label) |
 | CAIP-10 account | `^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$` (`namespace:reference:address`) |
 | Stream ID | `^[0-9]{1,20}-[0-9]{1,20}$` (`<ms>-<seq>`), compared as the integer pair |
 | Error or outcome code | `^[a-z0-9_]{1,64}$` |

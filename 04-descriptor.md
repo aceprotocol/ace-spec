@@ -27,7 +27,7 @@ A verifier checks a PublishedAgent at one clock reading `now`, in this order; th
 3. The signature verifies as an operational signature of that KEL, where signed while live also requires `issuedAt` to be at or after the `ts` of the delegating `dlg` ([01](01-identity.md#operational-signatures); `stale_peer_binding` / `invalid_authorization`).
 4. Each delegation entry verifies ([§ Delegations](#delegations)). An entry that fails only because it has expired is dropped from the verifier's view; any other failure is `invalid_authorization`.
 
-Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Directory and lookup results are always complete signed PublishedAgents; a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true. A signer sets the `issuedAt` of a descriptor or card record to `max(now, ts of its last KEL event, issuedAt of its previous one + 1)`.
+Every other invalid field invalidates the whole descriptor. Unknown members are invalid. Lookup results are always complete signed PublishedAgents, and directory entries complete signed CardBundles ([§ Card record](#card-record)); a client MUST verify each one and MUST NOT merge unsigned metadata into it. Peers pin descriptors under [01](01-identity.md#pinning). A verified descriptor proves who asserted its contents, not that they are true. A signer sets the `issuedAt` of a descriptor or card record to `max(now, ts of its last KEL event, issuedAt of its previous one + 1)`.
 
 ## Caching
 
@@ -77,7 +77,7 @@ A card record cannot be revoked by a newer one alone: a holder of the signing ke
 
 Every registered agent's unexpired descriptor can be looked up by ACE ID ([07](07-relay.md#descriptors-and-cards)); `contact` and `listed` decide only who may request contact and whether the agent is listed. A client looking up a card record by ACE ID asks the relays of the identity's descriptor in listed order until one serves it.
 
-**Handles.** A handle is written `@name@host`, where `host` is the host (with its port, if any) of `home`, and the record member is the slug `name`. A handle is set once: an identity claims it with the first card record that carries it, and the relay of `home` binds it to that identity permanently, also after unregister; it is never reassigned or renamed. For as long as `home` names the same relay, every card record the identity publishes MUST carry the same `handle`. A record naming another `home` claims nothing at the earlier relay, whose binding stays; the handle there then resolves as `unknown_peer`. A client that has pinned a handle for an ACE ID at a `home` treats a CardBundle of that identity naming the same `home` with a different or missing `handle` as `invalid_authorization`. A client resolving `@name@host` queries `GET /v1/handles/{name}` at the relay of `host`, verifies the returned CardBundle and MUST check that its `home` is the relay it queried and its `handle` is `name`; otherwise the result is `unknown_peer`. The binding of `@name@host` to an ACE ID is trusted to the relay of `host`. Bindings are permanent, so a relay that resolves a handle to a different ACE ID than before has misbehaved detectably: a client MUST pin `(home, handle) → aceId`, durably, on its first resolution and treat a resolution to a different ACE ID as `invalid_authorization`. Contacts are saved by ACE ID; a handle only finds one.
+**Handles.** A handle is written `@name@host`, where `host` is the host (with its port, if any) of `home`, and the record member is the slug `name`. A handle is set once: an identity claims it with the first card record that carries it, and the relay of `home` binds it to that identity permanently, also after unregister; it is never reassigned or renamed. For as long as `home` names the same relay, every card record the identity publishes MUST carry the same `handle`. A record naming another `home` claims nothing at the earlier relay, whose binding stays; the handle there then resolves as `unknown_peer`. A client that has pinned a handle for an ACE ID at a `home` treats a CardBundle of that identity naming the same `home` with a different or missing `handle` as `invalid_authorization`. A client reading a handle address typed by a person MAY accept it without the leading `@` and in any ASCII case, lowercasing it before checking the grammar; records and requests carry only the canonical form. A client resolving `@name@host` queries `GET /v1/handles/{name}` at the relay of `host`, verifies the returned CardBundle and MUST check that its `home` is the relay it queried and its `handle` is `name`; otherwise the result is `unknown_peer`. The binding of `@name@host` to an ACE ID is trusted to the relay of `host`. Bindings are permanent, so a relay that resolves a handle to a different ACE ID than before has misbehaved detectably: a client MUST pin `(home, handle) → aceId`, durably, on its first resolution and treat a resolution to a different ACE ID as `invalid_authorization`. Contacts are saved by ACE ID; a handle only finds one.
 
 ## Card
 
@@ -85,12 +85,11 @@ The `card` member of a card record is a closed object; every member is optional:
 
 | Member | Rule |
 |---|---|
-| `name` | 1–64 characters, no U+0000–U+001F or U+007F |
 | `description` | At most 256 characters, no U+0000–U+001F or U+007F |
 | `image` | ACE HTTPS URL ([02](02-encoding.md#https-urls)) |
 | `tags` | At most 10 distinct strings matching `^[a-z0-9-]{1,32}$` |
 
-Card contents are untrusted self-assertions. The tag `hosted` is reserved: it declares that a service holds the agent's keys. A hosted runtime MUST include it and MUST NOT allow its removal. No other tag has protocol meaning.
+The card carries what discovery needs and nothing that names the agent: a display name changes and is application data; the permanent handle is the protocol's human-readable identifier. Card contents are untrusted self-assertions. The tag `hosted` is reserved: it declares that a service holds the agent's keys. A hosted runtime MUST include it and MUST NOT allow its removal. No other tag has protocol meaning.
 
 ## Extensions
 

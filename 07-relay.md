@@ -15,7 +15,7 @@ Requests and responses are JSON (`Content-Type: application/json`) unless stated
 | `POST /v1/card` | card record signature | CardBundle | `{"ok":true}` |
 | `GET /v1/card/{aceId}` | — | — | CardBundle |
 | `GET /v1/handles/{handle}` | — | — | CardBundle |
-| `GET /v1/descriptors?profile&cursor&limit` | — | — | `{"agents":[PublishedAgent],"cursor":string\|null}` |
+| `GET /v1/cards?tag&profile&cursor&limit` | — | — | `{"cards":[CardBundle],"cursor":string\|null}` |
 | `POST /v1/blocks` | `block` | `{peer, blocked, revision}` | `{"ok":true}` |
 | `POST /v1/send` | permit or `open` recipient | `{packet, permit?}` | `{"ok":true}` |
 | `GET /v1/inbox?since&limit` | `inbox` | — | `{"messages":[{"streamId","packet"}],"cursor":string\|null}` |
@@ -77,7 +77,7 @@ The relay writes identity and KEL atomically and reports `registered` (new), `id
 - A record whose `home` is another relay claims nothing here; a handle already bound to the identity here stays bound.
 - When `home` is this relay's public URL and a handle is bound to this identity here, the record MUST carry exactly that handle; a record that omits it or carries another is `invalid_argument`.
 - A relay whose public URL has a path binds no handle: a record naming it as `home` carries none ([04](04-descriptor.md#card-record)).
-- Otherwise, when `home` is this relay's public URL and the record names a handle, the relay binds it: a handle bound to no identity is bound to this one, permanently; a handle bound to another identity is `handle_taken`. A relay MAY reserve handles under its naming policy; a reserved handle is `handle_taken`. Binding is limited to `HANDLE_CLAIMS_PER_NETWORK_PER_DAY` per client network ([§ Client networks](#client-networks); `rate_limited`).
+- Otherwise, when `home` is this relay's public URL and the record names a handle, the relay binds it: a handle bound to no identity is bound to this one, permanently; a handle bound to another identity is `handle_taken`. A relay MAY reserve handles under its naming policy; a reserved handle is `handle_taken`. A handle's skeleton is the handle with its hyphens removed, `0` read as `o` and `1` as `l`; a relay SHOULD treat a handle whose skeleton equals that of a handle bound or reserved here as reserved, so `alice-bot`, `alicebot` and `a1icebot` cannot be held by different identities. Binding is limited to `HANDLE_CLAIMS_PER_NETWORK_PER_DAY` per client network ([§ Client networks](#client-networks); `rate_limited`).
 
 An identity therefore holds at most one handle, and a handle is never reassigned: a new identity can only claim a handle no identity has held. The record, the handle binding and their effects on directory and send change atomically. Handle bindings and card records do not expire; a card record is deleted only by unregister, and the handle binding survives it. The relay keeps the newest card record `issuedAt` and claims digest as long as it keeps the identity's KEL, so a deleted record cannot be replayed over a newer one. Its stored bytes are charged as [§ Registration](#registration) states.
 
@@ -89,7 +89,7 @@ An identity therefore holds at most one handle, and a handle is never reassigned
 
 A relay treats a stored descriptor or card record whose `kel` is not the identity's current registered KEL as absent (`unknown_peer`), also on publish: its `issuedAt` does not bound a new one. Clients check a resolved handle as [04](04-descriptor.md#card-record) states.
 
-`GET /v1/descriptors` is the public directory: the unexpired PublishedAgents of identities whose stored card record is `listed: true`, has `home` equal to this relay's public URL, ordered by ACE ID, optionally only those listing the exact profile ID `profile`. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`.
+`GET /v1/cards` is the public directory: the stored CardBundles of identities whose card record is `listed: true`, has `home` equal to this relay's public URL and whose descriptor is unexpired, ordered by ACE ID. Two optional filters narrow it: `tag`, an exact card tag the record lists, and `profile`, an exact profile ID the stored descriptor lists. The profile filter is a hint: a client obtains the descriptor before connecting ([05](05-admission.md#flow)) and relies on what that descriptor lists. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); a page is at most `MAX_PAGE_BYTES` and holds at least one entry when any remain; `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`. The directory is a complete, stable listing for crawling; ranking and text search over it are services built on it, not relay functions.
 
 ## Blocks
 

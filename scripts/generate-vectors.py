@@ -238,7 +238,10 @@ IDENTIFIERS = {
                                         ("ace:a b", False), ("ace:é", False), ("x:" + "a" * 254, True), ("x:" + "a" * 255, False)]),
     "threadId": (is_thread_id, [("t", True), ("thread-1 é😀", True), ("", False), ("a\x00b", False), ("a\x7fb", False),
                                 ("😀" * 256, True), ("😀" * 257, False)]),
-    "handle": (is_handle, [("abc", True), ("a_b-c9", True), ("ab", False), ("Abc", False), ("9abc", False), ("a" * 32, True), ("a" * 33, False)]),
+    "handle": (is_handle, [("abc", True), ("a-b9-c", True), ("a9b", True), ("a-9", True), ("ab", False), ("Abc", False),
+                           ("9abc", False), ("a_b", False), ("a--b", False), ("abc-", False), ("-abc", False), ("a.b", False),
+                           ("a" * 32, True), ("a" * 31 + "-", False), ("a" * 33, False), ("a-" * 15 + "ab", True),
+                           ("a-" * 16 + "a", False)]),
     "streamId": (is_stream_id, [("1741000000000-0", True), ("0-0", True), ("1-", False), ("a-1", False), ("1" * 21 + "-0", False)]),
     "outcomeCode": (lambda v: isinstance(v, str) and re.fullmatch(r"[a-z0-9_]{1,64}", v) is not None,
                     [("unknown_prekey", True), ("a" * 64, True), ("a" * 65, False), ("Bad", False), ("", False), ("a-b", False)]),
@@ -1083,7 +1086,7 @@ CARD_HOME = "https://relay.interop.test"
 SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
 CARD_BASE = {
     "aceId": alice.id, "issuedAt": NOW - 100, "home": CARD_HOME, "handle": "alice",
-    "card": {"name": "Alice", "description": "translation agent", "image": "https://example.com/a.png", "tags": ["nlp", "hosted"]},
+    "card": {"description": "translation agent", "image": "https://example.com/a.png", "tags": ["nlp", "hosted"]},
     "pay": [SOL], "contact": "open", "listed": False,
 }
 
@@ -1147,21 +1150,22 @@ card_field("handle with a home that has a path", home="https://relay.example:844
 for _u in NON_CANONICAL_HOSTS:
     card_field(f"home {_u} (normalized but not a canonical relay URL host)", home=_u)
 card_field("handle grammar", handle="Al")
+card_field("handle with an underscore", handle="al_ice")
+card_field("handle with a doubled hyphen", handle="al--ice")
 card_field("handle of 33 characters", handle="a" * 33)
 card_field("9 pay accounts", pay=[f"eip155:1:0x{i:040x}" for i in range(9)])
 card_field("empty pay", pay=[])
 card_field("duplicate pay", pay=[SOL, SOL])
 card_field("pay entry not CAIP-10", pay=["solana:7xKX"])
 card_field("pay entry not a string", pay=[1])
-card_field("card unknown member", card={"name": "x", "url": "https://x.example"})
-card_field("card name of 65 characters", card={"name": "a" * 65})
-card_field("card empty name", card={"name": ""})
+card_field("card unknown member", card={"url": "https://x.example"})
+card_field("card name (a display name is application data)", card={"name": "Alice"})
 card_field("card description of 257 characters", card={"description": "a" * 257})
 card_field("card image over http", card={"image": "http://example.com/a.png"})
 card_field("card tag uppercase", card={"tags": ["NLP"]})
 card_field("card 11 tags", card={"tags": [f"t{i}" for i in range(11)]})
 card_field("card duplicate tags", card={"tags": ["a", "a"]})
-card_field("record above 16384 canonical bytes", card={"name": "Alice", "description": "x" * 16384})
+card_field("record above 16384 canonical bytes", card={"description": "x" * 16384})
 bad_card("bundle with an extra member", {**BASE_CARD, "x": 1}, IA)
 bad_card("bundle without kel", {"card": BASE_CARD["card"]}, IA)
 bad_card("signed with a superseded delegation seq", card_bundle({**CARD_BASE, "aceId": bob.id}, signer=bob, seq=1), "stale_peer_binding")

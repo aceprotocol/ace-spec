@@ -743,6 +743,8 @@ pc("admission null", cj({**CONTENT, "admission": None}), "invalid_body")
 pc("admission without source", cj({**CONTENT, "admission": {"proof": _ADM["proof"], "permit": _ADM["permit"]}}), "invalid_body")
 pc("admission with an unknown member", cj({**CONTENT, "admission": {**_ADM, "extra": {}}}), "invalid_body")
 pc("admission proof not an object", cj({**CONTENT, "admission": {**_ADM, "proof": "permit"}}), "invalid_body")
+_RECEIPT = {"type": "ace:receipt:1", "schemaDigest": CORE.messages["ace:receipt:1"].digest, "body": {"messageId": "550e8400-e29b-41d4-a716-446655440000", "outcome": "delivered"}}
+pc("receipt with admission", cj({**_RECEIPT, "admission": _ADM}), "invalid_body")
 private_content = {
     "rules": "decodePrivateContent(UTF-8 'text' or hex-decoded 'hex') fails with 'error' (always invalid_body) or succeeds (null).",
     "cases": pc_cases,

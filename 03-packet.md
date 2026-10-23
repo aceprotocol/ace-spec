@@ -77,10 +77,10 @@ encodePayload(to, messageId, prekeyId, kemCiphertextBytes, payloadBytes)
 The plaintext is the canonical JSON ([02](02-encoding.md#canonical-json)) of exactly:
 
 ```json
-{ "type": "ace:text:1", "schemaDigest": "<64 hex>", "threadId": "optional", "body": { "message": "hello" } }
+{ "type": "ace:text:1", "schemaDigest": "<64 hex>", "threadId": "optional", "body": { "message": "hello" }, "admission": "optional" }
 ```
 
-- `type` is a namespaced identifier; `schemaDigest` is the **message digest** of that type in an installed manifest ([08](08-profiles.md#digests)); `body` is a JSON object; `threadId`, when present, is a thread ID. A JSON `null` `threadId` is rejected; absence is the only way to omit it. No other members are allowed.
+- `type` is a namespaced identifier; `schemaDigest` is the **message digest** of that type in an installed manifest ([08](08-profiles.md#digests)); `body` is a JSON object; `threadId`, when present, is a thread ID. A JSON `null` `threadId` is rejected; absence is the only way to omit it. `admission`, when present, is the closed object `{proof, permit, source}` of three JSON objects, the delivery permits and PublishedAgent of an Outbox retry ([05](05-admission.md#admission-recovery)); it is absent from receipts and contact packets, and the receiver never hands it to the application. No other members are allowed.
 - The plaintext follows the JSON value rules ([02](02-encoding.md#json-values)) and is at most `MAX_PLAINTEXT_BYTES`. A sender rejects larger content before encrypting.
 - Any parse or shape failure of the decrypted plaintext is `invalid_body`.
 

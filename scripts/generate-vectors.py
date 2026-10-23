@@ -737,6 +737,12 @@ pc("invalid UTF-8", b'{"type":"ace:text:1","schemaDigest":"' + TEXT_DIGEST.encod
 pc("not an object", b"[]", "invalid_body")
 pc("NaN literal", b'{"type":"ace:text:1","schemaDigest":"' + TEXT_DIGEST.encode() + b'","body":{"n":NaN}}', "invalid_body")
 pc("overflowing number", b'{"type":"ace:text:1","schemaDigest":"' + TEXT_DIGEST.encode() + b'","body":{"n":1e400}}', "invalid_body")
+_ADM = {"proof": {"issuer": "x"}, "permit": {"issuer": "y"}, "source": {"kel": []}}  # decoding checks the shape only (03); 05 checks the permits
+pc("valid with admission", cj({**CONTENT, "admission": _ADM}), None)
+pc("admission null", cj({**CONTENT, "admission": None}), "invalid_body")
+pc("admission without source", cj({**CONTENT, "admission": {"proof": _ADM["proof"], "permit": _ADM["permit"]}}), "invalid_body")
+pc("admission with an unknown member", cj({**CONTENT, "admission": {**_ADM, "extra": {}}}), "invalid_body")
+pc("admission proof not an object", cj({**CONTENT, "admission": {**_ADM, "proof": "permit"}}), "invalid_body")
 private_content = {
     "rules": "decodePrivateContent(UTF-8 'text' or hex-decoded 'hex') fails with 'error' (always invalid_body) or succeeds (null).",
     "cases": pc_cases,

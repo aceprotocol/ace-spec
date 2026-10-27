@@ -5,7 +5,7 @@ import {
   ACEError, CONTACT_TYPE, MemoryStore, ProfileSet, RECEIPT_TYPE, SoftwareIdentity, StorePrekeyVault, checkPacketTime,
   contactContent, createCardRecord, createDescriptor, verifyCardBundle, verifyKel, createPacket, createPermit, decodePacket, decryptPacket, receiptContent,
   verifyPacketSignature, verifyPermit, verifyPublishedAgent, TEXT_TYPE, BUNDLED_MANIFESTS, messageDigest,
-  checkReceiptBody, MAX_NOTE_BYTES,
+  checkReceiptBody, MAX_NOTE_BYTES, sha256Hex, fromBase64,
   type PrivateContent, type PublishedAgent,
 } from '../../../sdk-ts/dist/index.js';
 
@@ -30,8 +30,12 @@ async function load(dir: string, now: number) {
   await store.write(VAULT_KEY, readFileSync(join(dir, VAULT_KEY)));
   const vault = new StorePrekeyVault(store, { key: VAULT_KEY, clock: () => now });
   const agent = readJson(join(dir, 'agent.json')) as PublishedAgent;
-  return { identity, vault, agent };
+  // Writes the vault document back to the driver directory (after `offer` changed it).
+  const save = async () => writeFileSync(join(dir, VAULT_KEY), (await store.read(VAULT_KEY))!, { mode: 0o600 });
+  return { identity, vault, agent, save };
 }
+
+const prekeyIdOf = (publicKey: string) => sha256Hex(fromBase64(publicKey));
 
 async function genIdentity(dir: string, now: number, handle?: string) {
   mkdirSync(dir, { recursive: true });
@@ -62,10 +66,14 @@ function verifyCard(path: string, now: number) {
 }
 
 async function create(dir: string, o: Record<string, string>, now: number) {
-  const { identity, agent: self } = await load(dir, now);
+  const { identity, vault, agent: self, save } = await load(dir, now);
   const to = verifyPublishedAgent(readJson(o['to-agent']), now).agent;
   const prekeyOf = o['prekey-agent'] ? verifyPublishedAgent(readJson(o['prekey-agent']), now).agent : to;
+  // --to-prekey: a peer prekey the recipient offered (04 § Peer prekeys), else a descriptor prekey.
+  const target = o['to-prekey'] ? { id: prekeyIdOf(o['to-prekey']), publicKey: o['to-prekey'] } : prekeyOf.descriptor.prekey;
   const peer = to.descriptor.aceId;
+  // createPacket refuses content whose prekey is not an X-Wing public key, so there is no --offer-prekey here.
+  if (o['offer-prekey']) throw new Error('--offer-prekey is not supported by the TypeScript driver');
   let content: PrivateContent;
   switch (o.kind) {
     case 'text': content = { type: TEXT_TYPE, schemaDigest: TEXT_DIGEST, body: { message: o.message ?? 'hello' } }; break;
@@ -79,7 +87,9 @@ async function create(dir: string, o: Record<string, string>, now: number) {
     case 'contact-rejected': content = contactContent({ kind: 'rejected', profile: TEXT_TYPE, note: '', source: self }); break;
     default: throw new Error(`unknown kind ${o.kind}`);
   }
-  const packet = await createPacket({ identity, to: peer, prekey: prekeyOf.descriptor.prekey, content, timestamp: now, ...(o['message-id'] ? { messageId: o['message-id'] } : {}) });
+  content = { ...content, prekey: (await vault.offer(peer, now)).publicKey };
+  await save();
+  const packet = await createPacket({ identity, to: peer, prekey: target, content, timestamp: now, ...(o['message-id'] ? { messageId: o['message-id'] } : {}) });
   writeJson(o.out, packet);
   writeJson(`${o.out}.content.json`, content);
 }
@@ -109,7 +119,7 @@ async function open(dir: string, o: Record<string, string>, now: number) {
     checkReceiptBody(b);
     if (b.permit !== undefined) verifyPermit(b.permit, sender, me, now);
   }
-  return { ok: true, from: packet.from, messageId: packet.messageId, type: c.type, schemaDigest: c.schemaDigest, ...(c.threadId !== undefined ? { threadId: c.threadId } : {}), body: c.body };
+  return { ok: true, from: packet.from, messageId: packet.messageId, type: c.type, schemaDigest: c.schemaDigest, ...(c.threadId !== undefined ? { threadId: c.threadId } : {}), body: c.body, prekeyId: prekeyIdOf(c.prekey!) };
 }
 
 async function main() {

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -68,6 +69,14 @@ def flip_b64(text: str, index: int) -> str:
 
 
 THIRD = "ace:sha256:" + "1" * 64
+# Sender SDKs whose drivers can seal arbitrary 1216 bytes as the content `prekey` (--offer-prekey); sdk-ts's
+# createPacket refuses a content prekey that is not an X-Wing public key, so a TypeScript sender skips that case.
+PREKEY_FORGERS = {"py", "swift"}
+NOT_A_PREKEY = base64.b64encode(b"\xff" * 1216).decode()
+
+
+def prekey_id(public_key_b64: str) -> str:
+    return hashlib.sha256(base64.b64decode(public_key_b64)).hexdigest()
 
 
 def run_pair(s: str, r: str) -> dict[str, str]:
@@ -80,24 +89,33 @@ def run_pair(s: str, r: str) -> dict[str, str]:
     sender_id = read(sdir / "agent.json")["descriptor"]["aceId"]
     other = WORK / r / "c" / "agent.json"
     cells: dict[str, str] = {}
+    # The forward direction (s's identity to r's); `back` swaps roles for packets r sends back to s.
+    fwd = (s, sdir, r, rdir, r_agent, s_agent)
+    back = (r, rdir, s, sdir, s_agent, r_agent)
 
-    def create(name: str, kind: str, *extra: str, now: int = NOW) -> Path:
+    def create(name: str, kind: str, *extra: str, now: int = NOW, roles=fwd) -> Path:
+        maker, mdir, _, _, to_agent, _ = roles
         out = pair / f"{name}.json"
-        run(s, "create-packet", str(sdir), "--to-agent", r_agent, "--kind", kind, "--out", str(out), *extra, now=now)
+        run(maker, "create-packet", str(mdir), "--to-agent", to_agent, "--kind", kind, "--out", str(out), *extra, now=now)
         return out
 
-    def open_(name: str, packet: Path, from_agent: str = s_agent, now: int = NOW) -> dict:
+    def open_(name: str, packet: Path, from_agent: str | None = None, now: int = NOW, roles=fwd) -> dict:
+        _, _, opener, odir, _, own_agent = roles
         out = pair / f"{name}.result.json"
-        run(r, "open-packet", str(rdir), "--from-agent", from_agent, "--packet", str(packet), "--out", str(out), now=now)
+        run(opener, "open-packet", str(odir), "--from-agent", from_agent or own_agent, "--packet", str(packet),
+            "--out", str(out), now=now)
         return read(out)
 
-    def expect_ok(name: str, packet: Path, **kw) -> None:
+    def expect_ok(name: str, packet: Path, **kw) -> dict:
         got = open_(name, packet, **kw)
         content, p = read(Path(str(packet) + ".content.json")), read(packet)
-        ok = (got.get("ok") is True and got["from"] == sender_id and got["messageId"] == p["messageId"]
+        # The opener reports the ID of the peer prekey the packet carried (04 § Peer prekeys).
+        ok = (got.get("ok") is True and got["from"] == p["from"] and got["messageId"] == p["messageId"]
               and got["type"] == content["type"] and got["schemaDigest"] == content["schemaDigest"]
-              and got["body"] == content["body"] and got.get("threadId") == content.get("threadId"))
+              and got["body"] == content["body"] and got.get("threadId") == content.get("threadId")
+              and got.get("prekeyId") == prekey_id(content["prekey"]))
         cells[name] = "ok" if ok else f"FAIL {json.dumps(got)[:200]}"
+        return got
 
     def expect_error(name: str, packet: Path, code: str, **kw) -> None:
         got = open_(name, packet, **kw)
@@ -105,7 +123,22 @@ def run_pair(s: str, r: str) -> dict[str, str]:
 
     try:
         text = create("text", "text", "--message", "héllo / ☃ \U0001F600")
+        if read(text)["from"] != sender_id:
+            cells["driver"] = "FAIL packet from is not the sender identity"
         expect_ok("text", text)
+        # Peer prekeys: the receiver answers on the key the text packet offered it, and only its issuer opens that.
+        offered = read(Path(str(text) + ".content.json"))["prekey"]
+        reply = create("peer-prekey-reply", "text", "--message", "reply on the peer prekey", "--to-prekey", offered, roles=back)
+        if read(reply)["encryption"]["prekey"] != prekey_id(offered):
+            cells["peer-prekey-reply"] = "FAIL reply is not encrypted to the offered prekey"
+        else:
+            expect_ok("peer-prekey-reply", reply, roles=back)
+        # A bystander (r's identity "c") encrypting to that key: it was offered to another peer, so unknown_prekey.
+        third = pair / "third"
+        shutil.copytree(WORK / r / "c", third)
+        expect_error("peer-prekey-other-sender",
+                     create("peer-prekey-other-sender", "text", "--to-prekey", offered, roles=(r, third, s, sdir, s_agent, None)),
+                     "unknown_prekey", roles=back, from_agent=str(third / "agent.json"))
         ref = read(text)["messageId"]
         expect_ok("receipt-delivered", create("receipt-delivered", "receipt-delivered", "--ref-message-id", ref))
         expect_ok("receipt-rejected", create("receipt-rejected", "receipt-rejected", "--ref-message-id", ref, "--code", "invalid_body"))
@@ -144,6 +177,10 @@ def run_pair(s: str, r: str) -> dict[str, str]:
             path = pair / f"{name}.json"
             write(path, p)
             expect_error(name, path, code, from_agent=from_agent)
+        # Inside the ciphertext: a content `prekey` that is not an X-Wing public key (1216 x 0xFF).
+        if s in PREKEY_FORGERS:
+            expect_error("tamper-content-prekey", create("tamper-content-prekey", "text", "--offer-prekey", NOT_A_PREKEY),
+                         "invalid_body")
     except RuntimeError as exc:
         cells["driver"] = f"FAIL {exc}"
     return cells

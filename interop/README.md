@@ -47,11 +47,14 @@ a protocol rejection.
 
 ### `create-packet <dir> --to-agent F --kind K --out P [options] --now N`
 
-Verify the recipient PublishedAgent `F` at `N`, build the private content for `K`, encrypt to the
-recipient's descriptor prekey (or to the prekey of `--prekey-agent F2` when given), sign with
-`timestamp = N` (and `messageId` from `--message-id` when given, else a fresh UUIDv4). Write the
-packet to `P` and the exact private content `{type, schemaDigest, threadId?, body}` to
-`P.content.json`.
+Verify the recipient PublishedAgent `F` at `N`, build the private content for `K`, add `prekey`: the
+public key of the peer prekey the driver's vault offers the recipient (`offer(recipient, N)`, 04 §
+Peer prekeys; the vault state is kept in `<dir>`), or the Base64 bytes of `--offer-prekey B64` when
+given (a tamper case; a driver whose SDK refuses to seal such content may reject the option), encrypt
+to the recipient's descriptor prekey (or to the prekey of `--prekey-agent F2`, or to the peer prekey
+whose Base64 public key is `--to-prekey B64`, when given), sign with `timestamp = N` (and `messageId`
+from `--message-id` when given, else a fresh UUIDv4). Write the packet to `P` and the exact private
+content `{type, schemaDigest, threadId?, body, prekey}` to `P.content.json`.
 
 | `--kind` | Content |
 |---|---|
@@ -74,8 +77,9 @@ Open the packet as the identity in `<dir>`, in this order, the first failure dec
 3. the packet signature as an operational signature of that KEL, usable at `N`
    (`stale_peer_binding`, `invalid_signature`);
 4. the time window `N - 604800 <= timestamp <= N + 300` (`stale_timestamp`);
-5. decrypt with the referenced prekey (`unknown_prekey`, `decryption_failed`), parse the private
-   content (`invalid_body`);
+5. decrypt with the referenced prekey: a published one, or a peer prekey this identity offered to
+   `from` while its window lasts (`unknown_prekey`, `decryption_failed`); unpad and parse the
+   private content, whose `prekey` must be an X-Wing public key (`invalid_body`);
 6. `(type, schemaDigest)` installed (core + text) and the body schema (`unsupported_schema`,
    `invalid_body`);
 7. core rules: a contact packet has no freshness bound beyond step 4; its `source` verifies at `N`
@@ -85,7 +89,8 @@ Open the packet as the identity in `<dir>`, in this order, the first failure dec
    exactly when `rejected` and `prekey` exactly when `code` is `unknown_prekey` (`invalid_body`),
    and any `permit` verifies against the sender's KEL with `subject = <me>`.
 
-Write `R`: `{"ok": true, "from", "messageId", "type", "schemaDigest", "threadId"?, "body"}`, or
+Write `R`: `{"ok": true, "from", "messageId", "type", "schemaDigest", "threadId"?, "body", "prekeyId"}`
+(`prekeyId`: the lowercase hex SHA-256 of the content's `prekey`), or
 `{"error": "<ACE error code>"}`. This is the receive pipeline of [06](../06-delivery.md#receive-pipeline)
 minus admission, pinning and deduplication (which are local state, not wire interop).
 
@@ -118,6 +123,8 @@ of every SDK, and over tampered copies of each:
 | Case | Expectation |
 |---|---|
 | `text` (non-ASCII), `receipt-delivered`, `receipt-rejected` (code + renewal permit), `receipt-unknown-prekey` (`prekey` member), `contact-request`, `contact-accepted`, `contact-rejected` | opened; content equals the sender's `P.content.json` |
+| `peer-prekey-reply` | the receiver sends a text packet back, encrypted (`--to-prekey`) to the peer prekey the `text` packet carried: the original sender, its issuer, opens it (every opened case also checks the reported `prekeyId` against `P.content.json`) |
+| `peer-prekey-other-sender` | a bystander (the receiver SDK's identity `c`) encrypts to that same peer prekey: it was offered to another peer, `unknown_prekey` |
 | `text-old-but-in-window` | the text packet opened 3600 s later |
 | `contact-old-but-in-window` | the contact request opened 3 hours later: opened (contacts share the offline window) |
 | `unknown-prekey` | validly signed packet encrypted to a prekey the receiver never held: `unknown_prekey` |
@@ -130,6 +137,7 @@ of every SDK, and over tampered copies of each:
 | `tamper-version` (`ace: "2"`) | `unsupported_version` (any value other than `"1"`) |
 | `tamper-unknown-member` | `invalid_packet` |
 | `tamper-short-kem` (1119 bytes) | `invalid_packet` |
+| `tamper-content-prekey` | content `prekey` of 1216 × `0xFF` (not an X-Wing public key), sealed and signed by the sender: `invalid_body`. Run only for senders whose driver supports `--offer-prekey` (Python, Swift; sdk-ts's `createPacket` refuses such content) |
 
 Deterministic byte-level checks (headers, HKDF keys, payloads, X-Wing known answers) live in
 `../test-vectors.json`; this matrix checks that independently generated randomized artifacts

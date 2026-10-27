@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import sys
@@ -31,6 +32,7 @@ from ace import (
 )
 from ace.limits import MAX_NOTE_BYTES
 from ace.packet import check_window
+from ace.prekeys import Prekey, decode_prekey_public_key, prekey_id
 from ace.profiles import CONTACT_TYPE as CONTACT
 from ace.profiles import RECEIPT_TYPE as RECEIPT
 
@@ -110,12 +112,19 @@ def content_for(kind: str, a, identity, self_agent, peer: str, now: int) -> dict
 
 
 def create(d: str, a, now: int) -> None:
-    identity, _, self_agent = load(d, now)
+    identity, vault, self_agent = load(d, now)
     to = verify_published_agent(read(a.to_agent), now=now)
-    target = verify_published_agent(read(a.prekey_agent), now=now) if a.prekey_agent else to
+    if a.to_prekey:  # a peer prekey the recipient offered (04 § Peer prekeys)
+        public = decode_prekey_public_key(a.to_prekey)
+        target = Prekey(prekey_id(public), public)
+    else:
+        target = (verify_published_agent(read(a.prekey_agent), now=now) if a.prekey_agent else to).prekey
     content = content_for(a.kind, a, identity, self_agent, to.ace_id, now)
-    plaintext = encode_content(content["type"], content["schemaDigest"], content["body"])
-    packet = create_packet(identity, to.ace_id, target.prekey, plaintext, timestamp=now,
+    # The prekey offered to the recipient, or (--offer-prekey) arbitrary 1216 bytes for a tamper case.
+    offered = base64.b64decode(a.offer_prekey) if a.offer_prekey else vault.offer(to.ace_id, now).public_key
+    content["prekey"] = base64.b64encode(offered).decode()
+    plaintext = encode_content(content["type"], content["schemaDigest"], content["body"], prekey=offered)
+    packet = create_packet(identity, to.ace_id, target, plaintext, timestamp=now,
                            message_id=a.message_id)
     write(a.out, packet)
     write(a.out + ".content.json", content)
@@ -153,7 +162,7 @@ def open_(d: str, a, now: int) -> dict:
         if "permit" in b:
             verify_permit(b["permit"], sender, me, now=now)
     out = {"ok": True, "from": p.from_id, "messageId": p.message_id, "type": c["type"],
-           "schemaDigest": c["schemaDigest"], "body": b}
+           "schemaDigest": c["schemaDigest"], "body": b, "prekeyId": prekey_id(c["prekey"])}
     if "threadId" in c:
         out["threadId"] = c["threadId"]
     return out
@@ -165,7 +174,7 @@ def main() -> None:
     ap.add_argument("dir")
     ap.add_argument("--now", type=int, default=os.environ.get("ACE_INTEROP_NOW"))
     for o in ("to-agent", "prekey-agent", "kind", "out", "message", "message-id", "ref-message-id",
-              "ref-prekey", "code", "note", "from-agent", "packet", "handle"):
+              "ref-prekey", "code", "note", "from-agent", "packet", "handle", "to-prekey", "offer-prekey"):
         ap.add_argument("--" + o)
     a = ap.parse_args()
     if a.now is None:

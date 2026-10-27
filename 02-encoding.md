@@ -125,6 +125,7 @@ Normative values used by every implementation and relay.
 | `TIMESTAMP_WINDOW_SECONDS` | 300 | Future bound for every signed timestamp; freshness window for relay requests |
 | `OFFLINE_WINDOW_SECONDS` | 604800 | Past bound for packets; relay queue retention; Outbox retry horizon; lifetime of an outgoing `pending` entry; prekey retention; minimum relay retention of an unregistered identity's KEL |
 | `MAX_PLAINTEXT_BYTES` | 1179648 | Canonical private content (1 MiB + 128 KiB) |
+| `MIN_PLAINTEXT_BUCKET` | 4096 | Smallest padded plaintext ([03](03-packet.md#encryption)) |
 | `MAX_PACKET_BYTES` | 2097152 | Canonical JSON of a packet |
 | `MAX_SEND_BODY_BYTES` | 2162688 | Body of `POST /v1/send` (`MAX_PACKET_BYTES + 65536`) |
 | `MAX_PUBLISHED_AGENT_BYTES` | 1048576 | Canonical JSON of a PublishedAgent; also bounds a registration request and a CardBundle |

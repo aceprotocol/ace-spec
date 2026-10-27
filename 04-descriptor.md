@@ -45,7 +45,26 @@ A cached descriptor is bound to the KEL states it was verified under. A client u
 
 SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId)` and `prune(now)`.
 
-The forward-secrecy window is the retention period ([06](06-delivery.md#security-considerations)).
+The forward-secrecy window of a packet encrypted to a published prekey is the retention period ([06](06-delivery.md#security-considerations)).
+
+## Peer prekeys
+
+Besides its published prekey, an endpoint offers each peer a **peer prekey**: an X-Wing public key carried as `prekey` in every packet it sends that peer ([03](03-packet.md#private-content)), to which the peer encrypts its next first-attempt application message ([06](06-delivery.md#outbox-sender)). The endpoint that generated the key is its **issuer**; the peer that received it is its **holder**. Its ID is the lowercase hex SHA-256 of the 1216 bytes, as for a published prekey.
+
+**Issuer.** Per peer, the issuer keeps at most two seeds: the *offered* key and the *in-use* key.
+
+- The first packet to a peer generates its offered key; every later packet to that peer carries the same offered key until it is used.
+- When a packet from the peer opens under the offered key, the issuer, before acknowledging that packet at its relay: deletes the in-use seed, makes the offered key the in-use key, and generates a new offered key for its next packet. A packet opening under the in-use key changes nothing.
+- A seed, offered or in use, is deleted `OFFLINE_WINDOW_SECONDS` after the timestamp of the last packet that carried it as the offered key.
+- A peer prekey opens only packets whose `from` is the peer it was offered to; any other packet referencing it is `unknown_prekey`.
+- Seeds are protected like published prekey seeds and survive restarts. They are lost with the endpoint's state; the Outbox recovers ([06](06-delivery.md#outbox-sender)).
+
+**Holder.** The holder keeps at most one key per peer.
+
+- A packet that verified against the sender's pin and opened ([06](06-delivery.md#receive-pipeline) steps 4 and 6, duplicates at step 9 included) records its `prekey` as the held key for `from` when the packet's `timestamp` is greater than the held key's, bound to the pin state (the digest of the last pinned KEL event) step 4 verified under. A packet whose sender has no pin when it is processed records nothing.
+- The held key is used only while the peer's pin is the one it is bound to and less than `OFFLINE_WINDOW_SECONDS` have passed since the timestamp of the packet that carried it. It is dropped when the peer is blocked and when a receipt `rejected:unknown_prekey` names it.
+
+SDK note: the `PrekeyVault` gains `offer(peer, now)`, `used(peer, prekeyId, now)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open(prekeyId, sender)` covers published and peer seeds.
 
 ## Card record
 

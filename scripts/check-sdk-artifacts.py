@@ -110,7 +110,7 @@ ts_errors = check_sdk(args.sdk_ts, args.sdk_ts / "tests" / "fixtures" / "test-ve
 
 SWIFT_NAMES = {
     "TIMESTAMP_WINDOW_SECONDS": "timestampWindowSeconds", "OFFLINE_WINDOW_SECONDS": "offlineWindowSeconds",
-    "MAX_PLAINTEXT_BYTES": "maxPlaintextBytes", "MAX_PACKET_BYTES": "maxPacketBytes",
+    "MAX_PLAINTEXT_BYTES": "maxPlaintextBytes", "MIN_PLAINTEXT_BUCKET": "minPlaintextBucket", "MAX_PACKET_BYTES": "maxPacketBytes",
     "MAX_PUBLISHED_AGENT_BYTES": "maxPublishedAgentBytes", "MAX_JSON_DEPTH": "maxJSONDepth", "MAX_TYPE_BYTES": "maxTypeBytes",
     "MAX_THREAD_ID_LENGTH": "maxThreadIdLength", "MAX_KEL_EVENTS": "maxKelEvents", "MAX_SIGNING_KEY_LIFETIME": "maxSigningKeyLifetime",
     "MAX_DESCRIPTOR_LIFETIME": "maxDescriptorSeconds", "MAX_DELEGATION_LIFETIME": "maxCredentialSeconds",

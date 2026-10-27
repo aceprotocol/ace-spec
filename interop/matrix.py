@@ -159,7 +159,7 @@ def run_pair(s: str, r: str) -> dict[str, str]:
             ("tamper-payload", lambda p: p["encryption"].__setitem__("payload", flip_b64(p["encryption"]["payload"], 20)), "invalid_signature", s_agent),
             ("tamper-kem", lambda p: p["encryption"].__setitem__("kemCiphertext", flip_b64(p["encryption"]["kemCiphertext"], 5)), "invalid_signature", s_agent),
             ("tamper-prekey-id", lambda p: p["encryption"].__setitem__("prekey", "0" * 64), "invalid_signature", s_agent),
-            ("tamper-timestamp", lambda p: p.__setitem__("timestamp", p["timestamp"] - 1), "invalid_signature", s_agent),
+            ("tamper-timestamp", lambda p: p.__setitem__("timestamp", p["timestamp"] + 1), "invalid_signature", s_agent),
             ("tamper-message-id", lambda p: p.__setitem__("messageId", "00000000-0000-4000-8000-000000000000"), "invalid_signature", s_agent),
             ("tamper-to", lambda p: p.__setitem__("to", THIRD), "wrong_recipient", s_agent),
             ("tamper-version", lambda p: p.__setitem__("ace", "2"), "unsupported_version", s_agent),

@@ -5,7 +5,8 @@ Run with the Python SDK's interpreter from ``ace-spec/``::
 
     ../sdk-py/.venv/bin/python scripts/generate-vectors.py
 
-Every expectation is written out from the specification (chapters 01-08, profiles/commerce.md) and
+Every expectation is written out from the specification (chapters 01-08, profiles/delegation.md,
+profiles/commerce.md) and
 asserted against the Python SDK while generating, so a generator run is also a conformance check of
 sdk-py. Each section carries a ``rules`` string telling consumers exactly what to call.
 
@@ -32,11 +33,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from ace import (
-    ACEError, CORE, COMMERCE, TEXT, Inbox, Outbox, PeerStore, PrekeyVault, PrivateMessage, ProfileManifest, Profiles, ReplayDetector,
+    ACEError, CORE, COMMERCE, DELEGATION, DELEGATION_TYPE, TEXT, Inbox, Outbox, PeerStore, PrekeyVault, PrivateMessage, ProfileManifest, Profiles, ReplayDetector,
     SoftwareIdentity, SoftwareKey, canonical_state_bytes, check_receipt_body, check_stranger_source, conversation_key, create_auth_headers,
     create_permit, create_registration_request, create_packet, decode_content, decode_packet, decrypt_packet, extend_kel, is_usable,
-    issue_delegation, key_digest, signing_message, verify_delegation, verify_erc8004_registration, verify_kel, verify_operational_signature,
+    key_digest, signing_message, verify_erc8004_registration, verify_kel, verify_operational_signature,
     verify_packet, verify_permit, verify_published_agent, verify_signature, create_card_record, verify_card_bundle,
+    create_delegation_credential, delegation_rules, validate_delegation_ext, verify_delegation_credential,
 )
 from ace import _xwing
 from ace._encoding import (
@@ -47,7 +49,7 @@ from ace._net import is_blocked_address
 from ace._relay_url import is_canonical_relay_url, normalize_relay_url
 from ace._signing import encode_payload
 from ace.commerce import ThreadStore, commerce_rules, validate_commerce_ext
-from ace.delegation import validate_erc8004
+from ace.card_record import validate_erc8004
 from ace.identity import sign_claims
 from ace.kel import create_inception, create_rotation, create_signing_delegation, event_bytes
 from ace.packet import aead_key, check_window, packet_header, packet_sign_payload
@@ -134,7 +136,7 @@ def simple_agent(name, not_after=None) -> Agent:
 
 alice = simple_agent("alice")
 carol = simple_agent("carol", not_after=NOW + 100)  # signing delegation expires at NOW + 100
-dave = simple_agent("dave")  # a delegation issuer
+dave = simple_agent("dave")  # an ace:delegation:1 credential issuer
 
 
 def make_bob() -> Agent:
@@ -359,12 +361,13 @@ sig_message = signing_message(alice.id, NOW, alice.seq, b"vector")
 sig_value = alice.signing.sign(sig_message, "packet")
 assert verify_signature(sig_message, "packet", sig_value, alice.signing.public_key())
 assert not verify_signature(sig_message, "agent-descriptor", sig_value, alice.signing.public_key())
-# 02 § Signatures: a delivery permit and a delegation credential have claims of the same shape
-# ({issuer, subject, issuedAt, expiresAt}); only the context tells them apart.
+# 02 § Signing actions: a delivery permit and an ace:delegation:1 credential (a profile's own signed object, signed with
+# the profile ID as its action) have claims of the same shape ({issuer, subject, issuedAt, expiresAt}); only the context
+# tells them apart.
 SAME_SHAPE = {"issuer": dave.id, "subject": alice.id, "issuedAt": NOW - 100, "expiresAt": NOW + 3600}
 same_message = signing_message(dave.id, NOW - 100, dave.seq, canonical_state_bytes(SAME_SHAPE))
-same_value = dave.signing.sign(same_message, "delegation")
-assert verify_signature(same_message, "delegation", same_value, dave.signing.public_key())
+same_value = dave.signing.sign(same_message, DELEGATION_TYPE)
+assert verify_signature(same_message, DELEGATION_TYPE, same_value, dave.signing.public_key())
 assert not verify_signature(same_message, "delivery-permit", same_value, dave.signing.public_key())
 signing = {
     "rules": (
@@ -372,7 +375,8 @@ signing = {
         "== messageHex, with seqOrEmpty empty when seq is null (a KEL event signature) and decimal(seq) otherwise. "
         "actionSeparation: ML-DSA-65 verify of 'signature' over messageHex under agents[signer]'s signing key with ctx = "
         "each listed action gives its boolean. The second entry signs credential-shaped claims (the same shape as a "
-        "delivery permit's) with ctx 'delegation': only the context distinguishes the two objects."
+        "delivery permit's) with ctx 'ace:delegation:1' (the profile ID, profiles/delegation.md): only the context "
+        "distinguishes the two objects."
     ),
     "encodePayload": [ep_case([]), ep_case([""]), ep_case(["ace", b"\x00\xff"]), ep_case(["é", "", b""])],
     "message": [{"aceId": a, "timestamp": t, "seq": q, "payloadHex": p.hex(), "messageHex": signing_message(a, t, q, p).hex()}
@@ -381,7 +385,7 @@ signing = {
         {"signer": "alice", "messageHex": sig_message.hex(), "signature": b64(sig_value),
          "actions": {"packet": True, "agent-descriptor": False, "delivery-permit": False}},
         {"signer": "dave", "claims": SAME_SHAPE, "messageHex": same_message.hex(), "signature": b64(same_value),
-         "actions": {"delegation": True, "delivery-permit": False}},
+         "actions": {DELEGATION_TYPE: True, "delivery-permit": False}},
     ],
 }
 
@@ -508,6 +512,9 @@ def op_case(name, signer, signed_at, sig, now, code, action="packet"):
 
 
 op_case("valid (bob, seq 3)", bob, NOW, bob.raw_sign("packet", NOW, OP_PAYLOAD), NOW, None)
+op_case("signed at the delegating dlg's ts (bob, seq 3)", bob, T0 + 10, bob.raw_sign("packet", T0 + 10, OP_PAYLOAD), NOW, None)
+op_case("signed one second before the delegating dlg: stale_peer_binding", bob, T0 + 9, bob.raw_sign("packet", T0 + 9, OP_PAYLOAD), NOW,
+        "stale_peer_binding")
 op_case("superseded delegation seq: stale_peer_binding", bob, NOW, bob.raw_sign("packet", NOW, OP_PAYLOAD, seq=1), NOW, "stale_peer_binding")
 op_case("signed before notAfter (carol)", carol, NOW + 99, carol.raw_sign("packet", NOW + 99, OP_PAYLOAD), NOW, None)
 op_case("signed at notAfter: stale_peer_binding", carol, NOW + 100, carol.raw_sign("packet", NOW + 100, OP_PAYLOAD), NOW, "stale_peer_binding")
@@ -524,7 +531,8 @@ kel = {
         "signing delegation {seq, notAfter} (null when none) and isUsable(state, now). invalid: verifyKel(kel, now) fails "
         "with 'error' (rule 1 structure is checked for the whole log before any signature). eventBytes: canonical bytes of "
         "each event. forks: extendKel(pinned ? verifyKel(pinned, now) : null, candidate, now) gives 'outcome' and the "
-        "resulting state's seq, or fails with 'error'. operational: 01 § Operational signatures rules 1-5 for "
+        "resulting state's seq, or fails with 'error'. operational: 01 § Operational signatures rules 1-5 (rule 3: the "
+        "timestamp is at or after the ts of the delegating dlg and before its notAfter) for "
         "'signature' over M(agents[signer].aceId, timestamp, signature.seq, payload) with ctx 'action' against "
         "verifyKel(agents[signer].kel, now), the signer usable at 'now' (rule 5): error null = valid."
     ),
@@ -678,6 +686,8 @@ open_case("prekey the receiver does not hold: unknown_prekey",
 open_case("signed at the delegation's notAfter: stale_peer_binding", manual_packet(carol, bob.id, BOB_PREKEY, CONTENT, NOW + 100), "carol", NOW, "stale_peer_binding")
 open_case("back-dated: signed before the delegation's notAfter, opened after it (06 step 4): stale_peer_binding",
           manual_packet(carol, bob.id, BOB_PREKEY, CONTENT, NOW + 50), "carol", NOW + 150, "stale_peer_binding")
+open_case("timestamp before the sender's dlg ts: stale_peer_binding", manual_packet(alice, bob.id, BOB_PREKEY, CONTENT, T0 - 1), "alice",
+          NOW, "stale_peer_binding")
 open_case("plaintext is not private content: invalid_body",
           manual_packet(alice, bob.id, BOB_PREKEY, b'{"type":"ace:text:1","body":{}}', NOW), "alice", NOW, "invalid_body")
 open_case("AEAD key from the wrong shared secret: decryption_failed",
@@ -787,15 +797,16 @@ private_content = {
     "cases": pc_cases,
 }
 
-# =============================================================================== descriptor, delegation, permit
+# =============================================================================== descriptor, permit
 
 COMMERCE_EXT = {"settlement": [{"method": "stablecoin", "asset": "eip155:8453/erc20:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"}, {"method": "stripe-link"}]}
-DLG_ENTRY = issue_delegation(dave.identity, alice.id, now=NOW - 100, lifetime=604800)
+# dave's ace:delegation:1 credential for alice (profiles/delegation.md), issued at NOW - 100 for the full 7 days
+DLG_CRED = create_delegation_credential(dave.identity, alice.id, now=NOW - 100)
+assert DLG_CRED["issuedAt"] == NOW - 100 and DLG_CRED["expiresAt"] == NOW - 100 + 604800
 BASE = {
     "aceId": alice.id, "issuedAt": NOW - 100, "expiresAt": NOW + 3600, "relays": [RELAY],
     "prekey": ALICE_PREKEY, "profiles": [TEXT.descriptor(), COMMERCE.descriptor()],
-    "ext": {"ace:commerce:1": COMMERCE_EXT}, "delegations": [DLG_ENTRY],
-    "erc8004": [{"agentRegistry": "eip155:8453:0x8004a169fb4a3325136eb29fa0ceb6d2e539a432", "agentId": "42"}],
+    "ext": {"ace:commerce:1": COMMERCE_EXT},
 }
 
 
@@ -827,27 +838,33 @@ def published(claims, signer: Agent = alice, kel=None, resign_=True, seq=None):
 
 desc_valid, desc_invalid = [], []
 BASE_PA = published(BASE)
-va = verify_published_agent(BASE_PA, now=NOW)
-assert va.delegations == (dave.id,)
-desc_valid.append({"name": "full descriptor", "publishedAgent": BASE_PA, "now": NOW, "delegations": [dave.id]})
-_min = {k: v for k, v in BASE.items() if k not in ("ext", "delegations", "erc8004")}
+desc_valid.append({"name": "full descriptor", "publishedAgent": BASE_PA, "now": NOW})
+_min = {k: v for k, v in BASE.items() if k != "ext"}
 _min = {**_min, "profiles": []}
-desc_valid.append({"name": "minimal descriptor", "publishedAgent": published(_min), "now": NOW, "delegations": []})
+desc_valid.append({"name": "minimal descriptor", "publishedAgent": published(_min), "now": NOW})
 desc_valid.append({"name": "lifetime of 604800 (7 days)", "publishedAgent": published({**_min, "expiresAt": NOW - 100 + 604800}),
-                   "now": NOW, "delegations": []})
-_exp_dlg = issue_delegation(dave.identity, alice.id, now=NOW - 700000, lifetime=604800)
-_pa = published({**BASE, "delegations": [_exp_dlg]})
-assert verify_published_agent(_pa, now=NOW).delegations == ()
-desc_valid.append({"name": "expired delegation is dropped, not fatal", "publishedAgent": _pa, "now": NOW, "delegations": []})
+                   "now": NOW})
+# ace:delegation:1 ext: shape only (no signature, no expiry), the subject is the descriptor's aceId
+DLG_PROFILES = [TEXT.descriptor(), DELEGATION.descriptor(), COMMERCE.descriptor()]
+DLG_EXT = {"ace:commerce:1": COMMERCE_EXT, "ace:delegation:1": {"credentials": [DLG_CRED]}}
+desc_valid.append({"name": "ace:delegation:1 ext with dave's credential", "now": NOW,
+                   "publishedAgent": published({**BASE, "profiles": DLG_PROFILES, "ext": DLG_EXT})})
+_exp_cred = create_delegation_credential(dave.identity, alice.id, now=NOW - 700000)
+desc_valid.append({"name": "ace:delegation:1 ext with an expired credential (expiry is not checked)", "now": NOW,
+                   "publishedAgent": published({**BASE, "profiles": DLG_PROFILES,
+                                                "ext": {"ace:delegation:1": {"credentials": [_exp_cred]}}})})
 _pa = published({**BASE, "relays": ["https://relay.example/ace", "https://r2.example:8443"]})
-desc_valid.append({"name": "relay with path and port", "publishedAgent": _pa, "now": NOW, "delegations": [dave.id]})
+desc_valid.append({"name": "relay with path and port", "publishedAgent": _pa, "now": NOW})
 _pa = copy.deepcopy(BASE_PA)
 _pa["descriptor"]["issuedAt"] = 1.7601407e9  # == NOW - 100: same canonical claims, same signature
-desc_valid.append({"name": "issuedAt written as 1.7601407e9 (a wire integer)", "publishedAgent": _pa, "now": NOW, "delegations": [dave.id]})
-desc_valid.append({"name": "valid at expiresAt - 1", "publishedAgent": BASE_PA, "now": NOW + 3599, "delegations": [dave.id]})
+desc_valid.append({"name": "issuedAt written as 1.7601407e9 (a wire integer)", "publishedAgent": _pa, "now": NOW})
+desc_valid.append({"name": "valid at expiresAt - 1", "publishedAgent": BASE_PA, "now": NOW + 3599})
+_big = {"x:big:1": {"pad": "a" * (32768 - 22)}}  # {"x:big:1":{"pad":"…"}}: 32768 canonical bytes
+assert len(canonical_state_bytes(_big)) == 32768
+desc_valid.append({"name": "ext of exactly 32768 canonical bytes", "now": NOW, "publishedAgent": published(
+    {**BASE, "profiles": [TEXT.descriptor(), {"id": "x:big:1", "digest": "b" * 64}], "ext": _big})})
 for c in desc_valid:
-    got = verify_published_agent(c["publishedAgent"], now=c["now"])
-    assert list(got.delegations) == c["delegations"], c["name"]
+    verify_published_agent(c["publishedAgent"], now=c["now"])
 
 
 def bad_desc(name, pa, code, now=NOW):
@@ -893,34 +910,18 @@ field("commerce ext with a bad asset", ext={"ace:commerce:1": {"settlement": [{"
 field("commerce ext with 11 entries", ext={"ace:commerce:1": {"settlement": [{"method": "stablecoin", "asset": f"eip155:{i + 1}/erc20:0xabc"} for i in range(11)]}})
 field("commerce ext with duplicate entries", ext={"ace:commerce:1": {"settlement": [{"method": "stripe-link"}, {"method": "stripe-link"}]}})
 field("commerce ext with an unknown member", ext={"ace:commerce:1": {"settlement": [{"method": "stripe-link"}], "x": 1}})
-field("ext above 4096 canonical bytes", profiles=[TEXT.descriptor(), {"id": "x:big:1", "digest": "b" * 64}], ext={"x:big:1": {"pad": "a" * 4096}})
+field("ext above 32768 canonical bytes", profiles=[TEXT.descriptor(), {"id": "x:big:1", "digest": "b" * 64}],
+      ext={"x:big:1": {"pad": "a" * (32768 - 21)}})
+field("ace:delegation:1 ext naming another subject", profiles=DLG_PROFILES,
+      ext={"ace:delegation:1": {"credentials": [create_delegation_credential(dave.identity, bob.id, now=NOW - 100)]}})
+field("ace:delegation:1 ext without the profile announced", ext={"ace:delegation:1": {"credentials": [DLG_CRED]}})
 field("empty ext", ext={})
 field("unknown descriptor member", contact={"relay": RELAY})
-field("erc8004 registry is not CAIP-10", erc8004=[{"agentRegistry": "0x8004", "agentId": "1"}])
-field("erc8004 agentId with a leading zero", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "01"}])
-field("erc8004 agentId of 79 digits", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "1" * 79}])
-field("erc8004 agentId as a number", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": 1}])
-field("erc8004 duplicate entries", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "1"}] * 2)
-field("erc8004 five entries", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": str(i)} for i in range(5)])
-field("erc8004 empty", erc8004=[])
-field("delegations empty", delegations=[])
-field("five delegations", delegations=[DLG_ENTRY] * 5)
-field("duplicate delegation issuers", delegations=[DLG_ENTRY, issue_delegation(dave.identity, alice.id, now=NOW - 50)])
-field("delegation naming another subject", delegations=[issue_delegation(dave.identity, bob.id, now=NOW - 100)])
-_forged = copy.deepcopy(DLG_ENTRY)
-_forged["credential"]["expiresAt"] -= 1
-field("delegation credential changed after signing", delegations=[_forged])
-field("delegation lifetime above 604800", delegations=[{"kel": dave.kel, "credential": sign_claims(dave.identity, "delegation",
-      {"issuer": dave.id, "subject": alice.id, "issuedAt": NOW - 100, "expiresAt": NOW - 100 + 604801})}])
-field("delegation kel of another identity", delegations=[{"kel": bob.kel, "credential": DLG_ENTRY["credential"]}])
-_c_dlg = {"issuer": carol.id, "subject": alice.id, "issuedAt": NOW - 100, "expiresAt": NOW + 1000}
-_c_dlg = {**_c_dlg, "signature": carol.raw_sign("delegation", NOW - 100, canonical_state_bytes(_c_dlg))}
-bad_desc("delegation issuer not usable at now", published({**BASE, "delegations": [{"kel": carol.kel, "credential": _c_dlg}]}), IA, now=NOW + 200)
 _tampered = published(BASE)
 _tampered["descriptor"]["expiresAt"] -= 1
 bad_desc("claims changed after signing", _tampered, IA)
-bad_desc("descriptor signed with a superseded delegation seq", published({**BASE, "aceId": bob.id, "delegations": [issue_delegation(dave.identity, bob.id, now=NOW - 100)]}, signer=bob, seq=1), "stale_peer_binding")
-bad_desc("descriptor kel not usable at now (carol, now >= notAfter)", published({**BASE, "aceId": carol.id, "delegations": [issue_delegation(dave.identity, carol.id, now=NOW - 100)]}, signer=carol), "invalid_kel", now=NOW + 100)
+bad_desc("descriptor signed with a superseded delegation seq", published({**BASE, "aceId": bob.id}, signer=bob, seq=1), "stale_peer_binding")
+bad_desc("descriptor kel not usable at now (carol, now >= notAfter)", published({**BASE, "aceId": carol.id}, signer=carol), "invalid_kel", now=NOW + 100)
 _badkel = copy.deepcopy(alice.kel)
 _badkel[1]["sig"]["value"] = b64(bytes(3309))
 bad_desc("descriptor kel does not verify", published(BASE, kel=_badkel), "invalid_signature")
@@ -929,7 +930,7 @@ bad_desc("published agent without kel", {"descriptor": BASE_PA["descriptor"]}, I
 
 # Verification against a pin (01 § Pinning; prekey substitution by a superseded signing key).
 BOB_FORK = [bob.kel[0], create_signing_delegation(verify_kel(bob.kel[:1], NOW), key("bob-root"), key("bob-x").public_key(), T0 + 5)]
-_bob_claims = {**BASE, "aceId": bob.id, "prekey": OTHER_PREKEY, "delegations": [issue_delegation(dave.identity, bob.id, now=NOW - 100)]}
+_bob_claims = {**BASE, "aceId": bob.id, "prekey": OTHER_PREKEY}
 _c = {k: v for k, v in _bob_claims.items() if k != "signature"}
 _old_sig = {**_c, "signature": bob.raw_sign("agent-descriptor", _c["issuedAt"], canonical_state_bytes(_c), seq=1)}
 _new_sig = {**_c, "signature": bob.raw_sign("agent-descriptor", _c["issuedAt"], canonical_state_bytes(_c))}
@@ -945,7 +946,8 @@ for name, pa, code in [
 # the attack only works without the pin:
 assert outcome(lambda: verify_published_agent(desc_pinned[0]["publishedAgent"], now=NOW)) is None
 
-# 04 § Verification step 3 (SP12): signed while live also requires issuedAt >= the ts of the dlg its signature seq names.
+# 01 § Operational signatures rule 3: signed while live requires the signed timestamp (issuedAt) to be at or after the ts of
+# the dlg its signature seq names.
 # Fork recovery that re-delegates the same key at the same seq: the superseded branch FORK_OLD = icp, dlg(seq 1), dlg(seq 2,
 # key K, T0 + 5); the holder of the next root recovers with FORK_NEW = icp, rot(seq 1, T0 + 20), dlg(seq 2, key K, T0 + 20),
 # which supersedes FORK_OLD (01 rule 6). A document signed with K at seq 2 on the old branch (issuedAt T0 + 10) carries a
@@ -977,8 +979,8 @@ _issued_valid = [
      {"kel": FORK_OLD.kel, "descriptor": _fork_replayed}),
 ]
 for name, pa in _issued_valid:
-    assert verify_published_agent(pa, now=NOW).delegations == (), name
-    desc_valid.append({"name": name, "publishedAgent": pa, "now": NOW, "delegations": []})
+    verify_published_agent(pa, now=NOW)
+    desc_valid.append({"name": name, "publishedAgent": pa, "now": NOW})
 bad_desc("issuedAt one second before the ts of the delegating dlg (bob, seq 3): stale_peer_binding",
          published({**_bob_min, "issuedAt": BOB_DLG_TS - 1}, signer=bob), "stale_peer_binding")
 bad_desc("fork recovery: the superseded branch's document (same seq, same key, issuedAt before the re-delegating dlg) replayed "
@@ -986,8 +988,10 @@ bad_desc("fork recovery: the superseded branch's document (same seq, same key, i
 
 descriptor = {
     "rules": (
-        "verifyPublishedAgent(publishedAgent, now) with production settings (no loopback relays). valid: succeeds and the "
-        "live delegations' issuers are 'delegations' (in order). invalid: fails with 'error'. pinned: verify with the "
+        "verifyPublishedAgent(publishedAgent, now) with production settings (no loopback relays). valid: succeeds. "
+        "invalid: fails with 'error'. An official profile's ext value is checked by that profile's validator: "
+        "ext['ace:delegation:1'] by validateDelegationExt(value, descriptor.aceId, now) (shape only, no signature, no "
+        "expiry). pinned: verify with the "
         "verifier's pin verifyKel(agents[pinned].kel, now): the carried KEL is reconciled with the pin (fork rules) and "
         "the signature must verify under the resulting newest state ('error' null = valid). A PeerStore/importAgent "
         "adopting these must behave the same."
@@ -995,66 +999,6 @@ descriptor = {
     "valid": desc_valid,
     "invalid": desc_invalid,
     "pinned": desc_pinned,
-}
-
-dlg_cases = []
-
-
-def dlg_case(name, entry, subject, now, result, pinned=None, out=dlg_cases):
-    def run():
-        _, live = verify_delegation(entry, subject, now=now, pinned=pinned.state if pinned else None)
-        return "live" if live else "expired"
-    case = {"name": name, "entry": entry, "subject": subject, "now": now, **({"pinned": pinned.name} if pinned else {})}
-    if result in ("live", "expired"):
-        assert run() == result, name
-        out.append({**case, "result": result})
-    else:
-        expect(f"delegation {'pinned ' if pinned else ''}{name}", run, result)
-        out.append({**case, "error": result})
-
-
-dlg_case("live", DLG_ENTRY, alice.id, NOW, "live")
-dlg_case("expired at expiresAt", DLG_ENTRY, alice.id, NOW - 100 + 604800, "expired")
-dlg_case("wrong subject", DLG_ENTRY, bob.id, NOW, IA)
-dlg_case("issuer equals subject", {"kel": dave.kel, "credential": {**DLG_ENTRY["credential"], "subject": dave.id}}, dave.id, NOW, IA)
-dlg_case("issuedAt beyond now + 300", DLG_ENTRY, alice.id, NOW - 401, IA)
-dlg_case("credential with a version member", {"kel": dave.kel, "credential": {**DLG_ENTRY["credential"], "version": 1}}, alice.id, NOW, IA)
-dlg_case("issuer not usable at now (01 rule 5 via step 3)", {"kel": carol.kel, "credential": _c_dlg}, alice.id, NOW + 200, IA)
-dlg_case("extra member", {**DLG_ENTRY, "x": 1}, alice.id, NOW, IA)
-dlg_case("credential changed after signing", _forged, alice.id, NOW, IA)
-# The issuer's pin (01 § Pinning, 04 § Delegations rule 2): bob (rotated) issues to alice.
-_bob_cred = {"issuer": bob.id, "subject": alice.id, "issuedAt": NOW - 100, "expiresAt": NOW + 3600}
-_bob_old = {"kel": bob.kel[:2], "credential": {**_bob_cred, "signature": bob.raw_sign("delegation", NOW - 100, canonical_state_bytes(_bob_cred), seq=1)}}
-_bob_new_prefix = {"kel": bob.kel[:2], "credential": {**_bob_cred, "signature": bob.raw_sign("delegation", NOW - 100, canonical_state_bytes(_bob_cred))}}
-_bob_new = {"kel": bob.kel, "credential": _bob_new_prefix["credential"]}
-_fork_sig = key("bob-x").sign(signing_message(bob.id, NOW - 100, 1, canonical_state_bytes(_bob_cred)), "delegation")
-_bob_forked = {"kel": BOB_FORK, "credential": {**_bob_cred, "signature": {"scheme": "ml-dsa-65", "seq": 1, "value": b64(_fork_sig)}}}
-dlg_pinned = []
-for name, entry, result in [
-    ("older issuer KEL prefix signed by the superseded delegation: invalid", _bob_old, IA),
-    ("older issuer KEL prefix signed by the pinned current delegation: live", _bob_new_prefix, "live"),
-    ("full issuer KEL: live", _bob_new, "live"),
-    ("forked issuer KEL: invalid", _bob_forked, IA),
-]:
-    dlg_case(name, entry, alice.id, NOW, result, pinned=bob, out=dlg_pinned)
-# without the pin the stale and forked entries verify standalone: the pin is what catches them
-assert verify_delegation(_bob_old, alice.id, now=NOW)[1] and verify_delegation(_bob_forked, alice.id, now=NOW)[1]
-_pa_bob_dlg = published({**BASE, "delegations": [_bob_old]})
-expect("descriptor delegation against the issuer pin",
-       lambda: verify_published_agent(_pa_bob_dlg, now=NOW, delegation_pins={bob.id: bob.state}), IA)
-assert verify_published_agent(_pa_bob_dlg, now=NOW).delegations == (bob.id,)
-dlg_descriptors = [{"name": "delegation issuer KEL prefix signed by a delegation the issuer pin superseded: invalid",
-                    "publishedAgent": _pa_bob_dlg, "delegationPins": ["bob"], "now": NOW, "error": IA}]
-delegation = {
-    "rules": ("verifyDelegation(entry, subject, now): 'live' / 'expired' (dropped, not invalid; TS returns null) or fails "
-              "with 'error' (every non-expiry failure is invalid_authorization, 04 § Delegations). pinned: the same with "
-              "the verifier's pin for the issuer, verifyKel(agents[pinned].kel, now): the carried issuer KEL is reconciled "
-              "with it (fork rules; the newest state verifies the credential). descriptors: verifyPublishedAgent("
-              "publishedAgent, now) with delegation pins {agents[x].aceId: verifyKel(agents[x].kel, now)} for x in "
-              "'delegationPins' fails with 'error' (without them it verifies)."),
-    "cases": dlg_cases,
-    "pinned": dlg_pinned,
-    "descriptors": dlg_descriptors,
 }
 
 permit_cases = []
@@ -1085,16 +1029,137 @@ permit_case("signed under a superseded delegation", permit_doc(bob, alice.id, NO
 permit_case("signed at the issuer's notAfter", permit_doc(carol, alice.id, NOW + 100, NOW + 200), carol, alice.id, NOW, "stale_peer_binding")
 permit_case("signed before the issuer's notAfter, verified after it (01 rule 5): stale_peer_binding",
             permit_doc(carol, alice.id, NOW + 50, NOW + 500), carol, alice.id, NOW + 150, "stale_peer_binding")
+permit_case("issuedAt before the issuer's dlg ts: stale_peer_binding",
+            permit_doc(bob, alice.id, BOB_DLG_TS - 1, BOB_DLG_TS - 1 + 2592000), bob, alice.id, NOW, "stale_peer_binding")
 permit = {
     "rules": ("verifyPermit(permit, verifyKel(agents[issuer].kel, now), subject, now) succeeds (error null) or fails with "
-              "'error'; the issuer must be usable at now (01 rule 5)."),
+              "'error'; the issuer must be usable at now (01 rule 5). A relay checking the same permit on POST /v1/send "
+              "(07 step 4: issuer = to, subject = from, against the issuer's registered KEL) refuses every failing case "
+              "with not_permitted."),
     "cases": permit_cases,
 }
+
+# =============================================================================== ace:delegation:1 (profiles/delegation.md)
+
+def cred_doc(issuer: Agent, subject, issued, expires, *, seq=None, extra=None):
+    """A credential signed with the profile ID as its action, without signer-side checks."""
+    c = {"issuer": issuer.id, "subject": subject, "issuedAt": issued, "expiresAt": expires, **(extra or {})}
+    return {**c, "signature": issuer.raw_sign(DELEGATION_TYPE, issued, canonical_state_bytes(c), seq=seq)}
+
+
+cred_cases, dext_cases, dmsg_cases = [], [], []
+
+
+def cred_case(name, cred, issuer: Agent, now, code):
+    expect(f"credential {name}", lambda: verify_delegation_credential(cred, verify_kel(issuer.kel, now), now), code)
+    cred_cases.append({"name": name, "credential": cred, "issuer": issuer.name, "now": now, "error": code})
+
+
+assert verify_signature(signing_message(dave.id, NOW - 100, dave.seq, canonical_state_bytes({k: v for k, v in DLG_CRED.items() if k != "signature"})),
+                        DELEGATION_TYPE, from_base64(DLG_CRED["signature"]["value"]), dave.signing.public_key())
+cred_case("valid (dave for alice, 7 days)", DLG_CRED, dave, NOW, None)
+cred_case("valid at expiresAt - 1", DLG_CRED, dave, NOW - 100 + 604799, None)
+cred_case("expired (now == expiresAt)", DLG_CRED, dave, NOW - 100 + 604800, IA)
+cred_case("issuer equals subject", cred_doc(dave, dave.id, NOW - 100, NOW + 3600), dave, NOW, IA)
+cred_case("lifetime of 604801", cred_doc(dave, alice.id, NOW - 100, NOW - 100 + 604801), dave, NOW, IA)
+cred_case("issuedAt beyond now + 300", cred_doc(dave, alice.id, NOW + 301, NOW + 3600), dave, NOW, IA)
+cred_case("expiresAt not after issuedAt", cred_doc(dave, alice.id, NOW - 100, NOW - 100), dave, NOW, IA)
+cred_case("subject is not an ACE ID", cred_doc(dave, "alice", NOW - 100, NOW + 3600), dave, NOW, IA)
+cred_case("extra member", cred_doc(dave, alice.id, NOW - 100, NOW + 3600, extra={"scope": "all"}), dave, NOW, IA)
+cred_case("changed after signing", {**DLG_CRED, "expiresAt": DLG_CRED["expiresAt"] - 1}, dave, NOW, IA)
+cred_case("signed with ctx 'delivery-permit'", {**DLG_CRED, "signature": dave.raw_sign("delivery-permit", NOW - 100,
+          canonical_state_bytes({k: v for k, v in DLG_CRED.items() if k != "signature"}))}, dave, NOW, IA)
+cred_case("verified against another issuer", DLG_CRED, carol, NOW, IA)
+cred_case("signed under a superseded delegation (bob, seq 1): stale_peer_binding",
+          cred_doc(bob, alice.id, NOW - 100, NOW + 3600, seq=1), bob, NOW, "stale_peer_binding")
+cred_case("issuedAt before the issuer's dlg ts: stale_peer_binding",
+          cred_doc(bob, alice.id, BOB_DLG_TS - 1, BOB_DLG_TS - 1 + 3600 * 24), bob, T0 + 3600, "stale_peer_binding")
+cred_case("issuer not usable at now (carol, now >= notAfter): stale_peer_binding",
+          cred_doc(carol, alice.id, NOW - 100, NOW + 3600), carol, NOW + 100, "stale_peer_binding")
+
+
+def dext_case(name, value, subject, now, code):
+    expect(f"delegation ext {name}", lambda: validate_delegation_ext(value, subject, now), code)
+    dext_cases.append({"name": name, "value": value, "subject": subject, "now": now, "error": code})
+
+
+_four = [create_delegation_credential(i.identity, carol.id, now=NOW - 100) for i in (alice, bob, dave)]
+_four.append(cred_doc(simple_agent("erin"), carol.id, NOW - 100, NOW + 3600))
+_fifth = cred_doc(simple_agent("frank"), carol.id, NOW - 100, NOW + 3600)
+dext_case("one credential", {"credentials": [DLG_CRED]}, alice.id, NOW, None)
+dext_case("four credentials accepted", {"credentials": _four}, carol.id, NOW, None)
+dext_case("a fifth credential: invalid_authorization", {"credentials": _four + [_fifth]}, carol.id, NOW, IA)
+dext_case("expired credential (expiry is not checked)", {"credentials": [cred_doc(dave, alice.id, NOW - 700000, NOW - 100000)]},
+          alice.id, NOW, None)
+dext_case("signature not verified (changed after signing)", {"credentials": [{**DLG_CRED, "expiresAt": NOW + 1}]}, alice.id, NOW, None)
+dext_case("wrong subject (not the descriptor's aceId)", {"credentials": [DLG_CRED]}, bob.id, NOW, IA)
+dext_case("issuer equals subject", {"credentials": [cred_doc(alice, alice.id, NOW - 100, NOW + 3600)]}, alice.id, NOW, IA)
+dext_case("duplicate issuers", {"credentials": [DLG_CRED, create_delegation_credential(dave.identity, alice.id, now=NOW - 50)]},
+          alice.id, NOW, IA)
+dext_case("no credentials", {"credentials": []}, alice.id, NOW, IA)
+dext_case("unknown member", {"credentials": [DLG_CRED], "x": 1}, alice.id, NOW, IA)
+dext_case("credentials not an array", {"credentials": DLG_CRED}, alice.id, NOW, IA)
+dext_case("lifetime of 604801", {"credentials": [cred_doc(dave, alice.id, NOW - 100, NOW - 100 + 604801)]}, alice.id, NOW, IA)
+dext_case("issuedAt beyond now + 300", {"credentials": [cred_doc(dave, alice.id, NOW + 301, NOW + 3600)]}, alice.id, NOW, IA)
+dext_case("credential with an extra member", {"credentials": [{**DLG_CRED, "x": 1}]}, alice.id, NOW, IA)
+dext_case("signature not a delegated signature's shape", {"credentials": [{**DLG_CRED, "signature": {**DLG_CRED["signature"],
+          "value": "AAAA"}}]}, alice.id, NOW, IA)
+
+# the hand-over message: dave (issuer) sends alice (subject) her credential; alice's rule runs at receive step 10
+
+
+def dmsg_case(name, direction, from_: Agent, to: Agent, body, code, now=NOW, pinned=True):
+    peers = PeerStore(MemoryStore(), clock=lambda: now)
+    if pinned and direction == "receive":
+        peers.pin(from_.kel, now)
+    rules = delegation_rules(peers, (to if direction == "receive" else from_).id)
+    event = MessageEvent(direction, mid(900 + len(dmsg_cases)), from_.id, to.id, now, DELEGATION_TYPE, None)
+    expect(f"delegation message {name}", lambda: rules.check(event, body), code)
+    dmsg_cases.append({"name": name, "direction": direction, "from": from_.name, "to": to.name, "body": body, "now": now,
+                       "senderPinned": pinned and direction == "receive", "error": code})
+
+
+dmsg_case("receive: dave hands alice her credential", "receive", dave, alice, {"credential": DLG_CRED}, None)
+dmsg_case("send: dave hands alice her credential", "send", dave, alice, {"credential": DLG_CRED}, None)
+dmsg_case("receive: issuer != from: invalid_body", "receive", bob, alice, {"credential": DLG_CRED}, "invalid_body")
+dmsg_case("send: issuer != from: invalid_body", "send", bob, alice, {"credential": DLG_CRED}, "invalid_body")
+dmsg_case("receive: subject != to: invalid_body", "receive", dave, carol, {"credential": DLG_CRED}, "invalid_body")
+dmsg_case("receive: expired credential: invalid_body", "receive", dave, alice, {"credential": DLG_CRED}, "invalid_body",
+          now=NOW - 100 + 604800)
+dmsg_case("receive: signature does not verify under the sender's pin: invalid_body", "receive", dave, alice,
+          {"credential": {**DLG_CRED, "expiresAt": DLG_CRED["expiresAt"] - 1}}, "invalid_body")
+dmsg_case("receive: sender not pinned: invalid_body", "receive", dave, alice, {"credential": DLG_CRED}, "invalid_body", pinned=False)
+dmsg_case("receive: credential with an extra member: invalid_body", "receive", dave, alice, {"credential": {**DLG_CRED, "x": 1}},
+          "invalid_body")
+
+delegation = {
+    "rules": (
+        "profiles/delegation.md. credentials: verifyDelegationCredential(credential, verifyKel(agents[issuer].kel, now), "
+        "now) succeeds (error null) or fails with 'error': the closed {issuer, subject, issuedAt, expiresAt, signature} "
+        "with issuer != subject, issuedAt <= now + 300, issuedAt < expiresAt <= issuedAt + 604800, now < expiresAt, "
+        "issuer == the state's aceId, and 'signature' an operational signature of the issuer over "
+        "canonicalStateBytes(claims) at timestamp = issuedAt with ctx 'ace:delegation:1' (stale_peer_binding from that "
+        "check passes through, every other failure is invalid_authorization). ext: validateDelegationExt(value, "
+        "subject, now) succeeds or fails with 'error' (invalid_authorization): the closed {credentials} of 1-4 "
+        "credentials with distinct issuers, each closed, subject == 'subject', issuer != subject, the issuedAt / "
+        "expiresAt grammar above and a signature of the delegated-signature shape; no expiry, no signature check. "
+        "messages: delegationRules(peers, local).check({direction, from: agents[from].aceId, to: agents[to].aceId, "
+        "type: 'ace:delegation:1', ...}, body) at clock 'now', where peers holds verifyKel(agents[from].kel, now) as the "
+        "pin for 'from' iff senderPinned, succeeds (error null) or fails with invalid_body: credential.issuer == from, "
+        "credential.subject == to, the credential's grammar and now < expiresAt, and on receive its signature verifies "
+        "under the sender's pin (no pin is a failure)."
+    ),
+    "credentials": cred_cases,
+    "ext": dext_cases,
+    "messages": dmsg_cases,
+}
+
+# =============================================================================== ERC-8004 (04 § Card record)
 
 ERC_SHAPES = [({"agentRegistry": "eip155:8453:0xabc", "agentId": "0"}, True), ({"agentRegistry": "eip155:8453:0xabc", "agentId": "9" * 78}, True),
               ({"agentRegistry": "eip155:8453:0xabc", "agentId": "007"}, False), ({"agentRegistry": "eip155:8453", "agentId": "1"}, False),
               ({"agentRegistry": "eip155:8453:0xabc", "agentId": "1", "chain": "base"}, False), ({"agentRegistry": "eip155:8453:0xabc"}, False),
-              # chain-native identifiers outside eip155 (04 § ERC-8004)
+              # chain-native identifiers outside eip155 (04 § Card record)
               ({"agentRegistry": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKX", "agentId": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"}, True),
               ({"agentRegistry": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKX", "agentId": "007"}, True),
               ({"agentRegistry": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKX", "agentId": "a" * 128}, True),
@@ -1119,8 +1184,9 @@ ERC_REG = [
 for r, ok in ERC_REG:
     assert verify_erc8004_registration(r, alice.id) == ok, r
 erc8004 = {
-    "rules": ("shapes: validateErc8004 / validateErc8004Binding accepts the entry iff 'valid' (invalid_authorization). "
-              "registrations: verifyErc8004Registration(registration, aceId) == result (a string is JSON text)."),
+    "rules": ("shapes: one card record erc8004 entry (04 § Card record); validateErc8004 / validateErc8004Binding / "
+              "validateErc8004Entry accepts it iff 'valid' (invalid_authorization otherwise). registrations: "
+              "verifyErc8004Registration(registration, aceId) == result (a string is JSON text)."),
     "shapes": [{"entry": e, "valid": ok} for e, ok in ERC_SHAPES],
     "registrations": [{"registration": r, "aceId": alice.id, "result": ok} for r, ok in ERC_REG],
 }
@@ -1132,7 +1198,8 @@ SOL = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:7xKXtg2CW87d97TXJSDpbD5jBkheTqA83
 CARD_BASE = {
     "aceId": alice.id, "issuedAt": NOW - 100, "home": CARD_HOME, "handle": "alice",
     "card": {"description": "translation agent", "image": "https://example.com/a.png", "tags": ["nlp", "hosted"]},
-    "pay": [SOL], "contact": "open", "listed": False,
+    "pay": [SOL], "erc8004": [{"agentRegistry": "eip155:8453:0x8004a169fb4a3325136eb29fa0ceb6d2e539a432", "agentId": "42"}],
+    "contact": "open", "listed": False,
 }
 
 
@@ -1142,14 +1209,15 @@ def card_bundle(claims, signer: Agent = alice, kel=None, seq=None):
 
 def card_summary(v) -> dict:
     r = v.record
-    return {"aceId": v.ace_id, "home": r["home"], "handle": r.get("handle"), "pay": r.get("pay"), "contact": r["contact"],
-            "listed": r["listed"]}
+    assert v.erc8004 == r.get("erc8004")
+    return {"aceId": v.ace_id, "home": r["home"], "handle": r.get("handle"), "pay": r.get("pay"), "erc8004": r.get("erc8004"),
+            "contact": r["contact"], "listed": r["listed"]}
 
 
 BASE_CARD = card_bundle(CARD_BASE)
 # the SDK's own constructor produces the same claims
-_made = create_card_record(alice.identity, home=CARD_HOME, handle="alice", card=CARD_BASE["card"], pay=[SOL], contact="open",
-                           listed=False, now=NOW - 100)
+_made = create_card_record(alice.identity, home=CARD_HOME, handle="alice", card=CARD_BASE["card"], pay=[SOL],
+                           erc8004=CARD_BASE["erc8004"], contact="open", listed=False, now=NOW - 100)
 assert {k: v for k, v in _made["card"].items() if k != "signature"} == CARD_BASE
 card_valid, card_invalid = [], []
 
@@ -1167,11 +1235,14 @@ def card_field(name, code=IA, **changes):
     bad_card(name, card_bundle(with_changes(CARD_BASE, changes)), code)
 
 
-good_card("alice: handle, home, pay, open, unlisted", BASE_CARD)
+good_card("alice: handle, home, pay, erc8004, open, unlisted", BASE_CARD)
 good_card("minimal: no handle, no pay, empty card, closed", card_bundle(
     {"aceId": alice.id, "issuedAt": NOW - 100, "home": CARD_HOME, "card": {}, "contact": "closed", "listed": True}))
 good_card("no expiry: verifies a year later", BASE_CARD, now=NOW + 365 * 86400)
 good_card("issuedAt at now + 300", card_bundle({**CARD_BASE, "issuedAt": NOW + 300}))
+good_card("4 erc8004 entries, eip155 and chain-native", card_bundle({**CARD_BASE, "erc8004": [
+    {"agentRegistry": "eip155:1:0xabc", "agentId": "0"}, {"agentRegistry": "eip155:1:0xabc", "agentId": "9" * 78},
+    {"agentRegistry": SOL, "agentId": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"}, {"agentRegistry": SOL, "agentId": "007"}]}))
 good_card("8 pay accounts", card_bundle({**CARD_BASE, "pay": [f"eip155:1:0x{i:040x}" for i in range(8)]}))
 good_card("home with a path and port, no handle", card_bundle(
     {k: v for k, v in CARD_BASE.items() if k != "handle"} | {"home": "https://relay.example:8443/ace"}))
@@ -1203,6 +1274,17 @@ card_field("empty pay", pay=[])
 card_field("duplicate pay", pay=[SOL, SOL])
 card_field("pay entry not CAIP-10", pay=["solana:7xKX"])
 card_field("pay entry not a string", pay=[1])
+card_field("erc8004 registry is not CAIP-10", erc8004=[{"agentRegistry": "0x8004", "agentId": "1"}])
+card_field("erc8004 eip155 agentId with a leading zero", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "01"}])
+card_field("erc8004 eip155 agentId of 79 digits", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "1" * 79}])
+card_field("erc8004 eip155 agentId not decimal", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "7xKX"}])
+card_field("erc8004 chain-native agentId with a hyphen", erc8004=[{"agentRegistry": SOL, "agentId": "7xKX-1"}])
+card_field("erc8004 chain-native agentId of 129 characters", erc8004=[{"agentRegistry": SOL, "agentId": "a" * 129}])
+card_field("erc8004 agentId as a number", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": 1}])
+card_field("erc8004 entry with an extra member", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "1", "chain": "base"}])
+card_field("erc8004 duplicate entries", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": "1"}] * 2)
+card_field("erc8004 five entries", erc8004=[{"agentRegistry": "eip155:1:0xabc", "agentId": str(i)} for i in range(5)])
+card_field("erc8004 empty", erc8004=[])
 card_field("card unknown member", card={"url": "https://x.example"})
 card_field("card name (a display name is application data)", card={"name": "Alice"})
 card_field("card description of 257 characters", card={"description": "a" * 257})
@@ -1217,7 +1299,7 @@ bad_card("signed with a superseded delegation seq", card_bundle({**CARD_BASE, "a
 bad_card("kel not usable at now (carol, now >= notAfter)", card_bundle({**CARD_BASE, "aceId": carol.id}, signer=carol), "invalid_kel",
          now=NOW + 100)
 bad_card("kel does not verify", card_bundle(CARD_BASE, kel=_badkel), "invalid_signature")
-# 04 § Card record verification step 3 (SP12): issuedAt at or after the ts of the delegating dlg.
+# 01 § Operational signatures rule 3 (via 04 § Card record step 3): issuedAt at or after the ts of the delegating dlg.
 _card_nh = {k: v for k, v in CARD_BASE.items() if k != "handle"}
 good_card("issuedAt equal to the ts of the delegating dlg (bob, seq 3)",
           card_bundle({**_card_nh, "aceId": bob.id, "issuedAt": BOB_DLG_TS}, signer=bob))
@@ -1233,7 +1315,7 @@ bad_card("fork recovery: the superseded branch's record (same seq, same key, iss
 card_records = {
     "rules": (
         "verifyCardBundle(bundle, now) with production settings (no loopback relays). valid: succeeds and the record's "
-        "aceId, home, handle, pay (null when absent), contact and listed equal 'expect'. invalid: fails with 'error'. "
+        "aceId, home, handle, pay, erc8004 (each null when absent), contact and listed equal 'expect'. invalid: fails with 'error'. "
         "A card record has no expiry."
     ),
     "valid": card_valid,
@@ -1243,7 +1325,7 @@ card_records = {
 # =============================================================================== manifests
 
 official = []
-for m, file in ((CORE, "core.json"), (TEXT, "text.json"), (COMMERCE, "commerce.json")):
+for m, file in ((CORE, "core.json"), (TEXT, "text.json"), (DELEGATION, "delegation.json"), (COMMERCE, "commerce.json")):
     with open(os.path.join(SPEC, "profiles", file), encoding="utf-8") as f:
         spec_m = json.load(f)
     assert canonical_state_bytes(spec_m) == canonical_state_bytes(m.to_dict()), file
@@ -1251,7 +1333,7 @@ for m, file in ((CORE, "core.json"), (TEXT, "text.json"), (COMMERCE, "commerce.j
 with open(os.path.join(SPEC, "08-profiles.md"), encoding="utf-8") as f:
     ch8 = f.read()
 for o in official:
-    assert o["digest"] in ch8 and all(d in ch8 for d in o["messages"].values()), o["file"]
+    assert o["digest"] in ch8 and all(d in ch8 for d in o["messages"].values()), (o["file"], o["digest"], o["messages"])
 
 OBJ = {"type": "object", "properties": {"q": {"type": "string", "maxLength": 8}}, "required": ["q"], "additionalProperties": False}
 
@@ -1385,9 +1467,10 @@ STRANGER = [
     ("ordinary source", BASE_PA, None),
     ("kel of 32 events (count only)", {**BASE_PA, "kel": _kel32}, None),
     ("kel of 33 events", {**BASE_PA, "kel": _kel33}, "not_permitted"),
-    ("two delegation entries", {**BASE_PA, "descriptor": {**BASE_PA["descriptor"], "delegations": [DLG_ENTRY, DLG_ENTRY]}}, "not_permitted"),
-    ("delegation kel of 33 events", {**BASE_PA, "descriptor": {**BASE_PA["descriptor"], "delegations": [{**DLG_ENTRY, "kel": _kel33}]}}, "not_permitted"),
-    ("no delegations", {**BASE_PA, "descriptor": {k: v for k, v in BASE_PA["descriptor"].items() if k != "delegations"}}, None),
+    ("ext with four credentials from unknown issuers", published({**BASE, "profiles": DLG_PROFILES,
+     "ext": {"ace:delegation:1": {"credentials": [create_delegation_credential(i.identity, alice.id, now=NOW - 100) for i in
+                                                  (bob, carol, dave)] + [cred_doc(simple_agent("erin"), alice.id, NOW - 100, NOW + 3600)]}}}),
+     None),
 ]
 stranger_cases = []
 for name, src, code in STRANGER:
@@ -1398,8 +1481,8 @@ core_rules = {
     "rules": (
         "receipts: the core receipt rules beyond the schema (06 § Receipts; checkReceiptBody) fail with 'error' "
         "(invalid_body) or accept (null). strangerSources: the structural bounds on a stranger's contact source (05 § "
-        "Receiver admission: kel and each delegation kel <= MAX_STRANGER_KEL_EVENTS events, <= MAX_STRANGER_DELEGATIONS "
-        "delegations), checked before and independently of any signature, fail with 'error' (not_permitted) or pass."
+        "Receiver admission: the source's own kel <= MAX_STRANGER_KEL_EVENTS events; nothing else in it is fetched or "
+        "counted), checked before and independently of any signature, fail with 'error' (not_permitted) or pass."
     ),
     "receipts": rcpt_cases,
     "strangerSources": stranger_cases,
@@ -1839,7 +1922,8 @@ def relay_verify_auth(headers, r, agent: Agent, now, audience=AUDIENCE):
     if abs(now - int(ts)) > 300:
         raise ACEError("stale_timestamp", "")
     na = state.signing.not_after
-    if (na is not None and int(ts) >= na) or not is_usable(state, now):
+    dlg_ts = state.events[state.signing.seq]["ts"]
+    if int(ts) < dlg_ts or (na is not None and int(ts) >= na) or not is_usable(state, now):  # signed while live (01 rule 3)
         raise ACEError("stale_peer_binding", "")
     m = signing_message(ace_id, int(ts), int(seq), encode_payload(aud, nonce, action_payload(r)))
     if not verify_signature(m, r["action"], raw, state.signing.public_key):
@@ -1883,6 +1967,15 @@ _carol_h = create_auth_headers(carol.identity, "listen", action_payload(AUTH_REQ
                                nonce=hashlib.sha256(b"nonce-carol").hexdigest())
 relay_verify_auth(_carol_h, AUTH_REQUESTS[0], carol, NOW + 99)
 auth_neg("signed while live, verified after the delegation's notAfter", _carol_h, NOW + 101, "stale_peer_binding", agent=carol)
+# signed one second before bob's current dlg (T0 + 10): create_auth_headers signs at the log tail, so these are made by hand
+_early_nonce = hashlib.sha256(b"nonce-early").hexdigest()
+_early_m = signing_message(bob.id, BOB_DLG_TS - 1, bob.seq, encode_payload(AUDIENCE, _early_nonce, action_payload(AUTH_REQUESTS[0])))
+_early_h = {**_h, "X-ACE-Nonce": _early_nonce, "X-ACE-Timestamp": str(BOB_DLG_TS - 1),
+            "X-ACE-Signature": b64(bob.signing.sign(_early_m, "listen"))}
+auth_neg("timestamp before the dlg ts", _early_h, BOB_DLG_TS + 100, "stale_peer_binding")
+# a signer never produces them: its timestamp is max(now, ts of its last event)
+assert create_auth_headers(bob.identity, "listen", action_payload(AUTH_REQUESTS[0]), BOB_DLG_TS - 1,
+                           audience=AUDIENCE)["X-ACE-Timestamp"] == str(BOB_DLG_TS)
 
 
 def relay_verify_registration(req, audience, now) -> str:
@@ -1906,8 +1999,8 @@ def relay_verify_registration(req, audience, now) -> str:
         raise ACEError("invalid_registration", "")
     if wire_int(sig["seq"]) != state.signing.seq:
         raise ACEError("invalid_signature", "seq")
-    if state.signing.not_after is not None and ts >= state.signing.not_after:
-        raise ACEError("stale_peer_binding", "")
+    if ts < state.events[state.signing.seq]["ts"] or (state.signing.not_after is not None and ts >= state.signing.not_after):
+        raise ACEError("stale_peer_binding", "")  # signed while live (01 rule 3)
     m = signing_message(state.ace_id, ts, state.signing.seq, encode_payload(state.last_hash, req["audience"]))
     if not verify_signature(m, "register-request", from_base64(sig["value"]), state.signing.public_key):
         raise ACEError("invalid_authorization", "")
@@ -2045,7 +2138,7 @@ with open(os.path.join(SPEC, "protocol-contract.json"), encoding="utf-8") as f:
 assert contract["profiles"] == {o["id"]: o["digest"] for o in official}
 
 vectors = {
-    "version": 11,
+    "version": 12,
     "description": "ACE shared conformance vectors (2026-10-27 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
     "now": NOW,
     "agents": {a.name: {"aceId": a.id, "export": a.export(), **({"supersededSigningSeeds": {"1": b64(bob.extra_signing[1].seed)}} if a is bob else {})}

@@ -72,8 +72,6 @@ async function create(dir: string, o: Record<string, string>, now: number) {
   // --to-prekey: a peer prekey the recipient offered (04 § Peer prekeys), else a descriptor prekey.
   const target = o['to-prekey'] ? { id: prekeyIdOf(o['to-prekey']), publicKey: o['to-prekey'] } : prekeyOf.descriptor.prekey;
   const peer = to.descriptor.aceId;
-  // createPacket refuses content whose prekey is not an X-Wing public key, so there is no --offer-prekey here.
-  if (o['offer-prekey']) throw new Error('--offer-prekey is not supported by the TypeScript driver');
   let content: PrivateContent;
   switch (o.kind) {
     case 'text': content = { type: TEXT_TYPE, schemaDigest: TEXT_DIGEST, body: { message: o.message ?? 'hello' } }; break;

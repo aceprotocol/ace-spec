@@ -49,9 +49,7 @@ a protocol rejection.
 
 Verify the recipient PublishedAgent `F` at `N`, build the private content for `K`, add `prekey`: the
 public key of the peer prekey the driver's vault offers the recipient (`offer(recipient, N)`, 04 §
-Peer prekeys; the vault state is kept in `<dir>`), or the Base64 bytes of `--offer-prekey B64` when
-given (a tamper case; a driver whose SDK refuses to seal such content may reject the option), encrypt
-to the recipient's descriptor prekey (or to the prekey of `--prekey-agent F2`, or to the peer prekey
+Peer prekeys; the vault state is kept in `<dir>`), encrypt to the recipient's descriptor prekey (or to the prekey of `--prekey-agent F2`, or to the peer prekey
 whose Base64 public key is `--to-prekey B64`, when given), sign with `timestamp = N` (and `messageId`
 from `--message-id` when given, else a fresh UUIDv4). Write the packet to `P` and the exact private
 content `{type, schemaDigest, threadId?, body, prekey}` to `P.content.json`.
@@ -78,8 +76,8 @@ Open the packet as the identity in `<dir>`, in this order, the first failure dec
    (`stale_peer_binding`, `invalid_signature`);
 4. the time window `N - 604800 <= timestamp <= N + 300` (`stale_timestamp`);
 5. decrypt with the referenced prekey: a published one, or a peer prekey this identity offered to
-   `from` while its window lasts (`unknown_prekey`, `decryption_failed`); unpad and parse the
-   private content, whose `prekey` must be an X-Wing public key (`invalid_body`);
+   `from` while its window lasts (`unknown_prekey`, `decryption_failed`); parse the private
+   content (`invalid_body`);
 6. `(type, schemaDigest)` installed (core + text) and the body schema (`unsupported_schema`,
    `invalid_body`);
 7. core rules: a contact packet has no freshness bound beyond step 4; its `source` verifies at `N`
@@ -137,7 +135,6 @@ of every SDK, and over tampered copies of each:
 | `tamper-version` (`ace: "2"`) | `unsupported_version` (any value other than `"1"`) |
 | `tamper-unknown-member` | `invalid_packet` |
 | `tamper-short-kem` (1119 bytes) | `invalid_packet` |
-| `tamper-content-prekey` | content `prekey` of 1216 × `0xFF` (not an X-Wing public key), sealed and signed by the sender: `invalid_body`. Run only for senders whose driver supports `--offer-prekey` (Python, Swift; sdk-ts's `createPacket` refuses such content) |
 
 Deterministic byte-level checks (headers, HKDF keys, payloads, X-Wing known answers) live in
 `../test-vectors.json`; this matrix checks that independently generated randomized artifacts

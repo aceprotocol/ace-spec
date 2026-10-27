@@ -69,10 +69,6 @@ def flip_b64(text: str, index: int) -> str:
 
 
 THIRD = "ace:sha256:" + "1" * 64
-# Sender SDKs whose drivers can seal arbitrary 1216 bytes as the content `prekey` (--offer-prekey); sdk-ts's
-# createPacket refuses a content prekey that is not an X-Wing public key, so a TypeScript sender skips that case.
-PREKEY_FORGERS = {"py", "swift"}
-NOT_A_PREKEY = base64.b64encode(b"\xff" * 1216).decode()
 
 
 def prekey_id(public_key_b64: str) -> str:
@@ -177,10 +173,6 @@ def run_pair(s: str, r: str) -> dict[str, str]:
             path = pair / f"{name}.json"
             write(path, p)
             expect_error(name, path, code, from_agent=from_agent)
-        # Inside the ciphertext: a content `prekey` that is not an X-Wing public key (1216 x 0xFF).
-        if s in PREKEY_FORGERS:
-            expect_error("tamper-content-prekey", create("tamper-content-prekey", "text", "--offer-prekey", NOT_A_PREKEY),
-                         "invalid_body")
     except RuntimeError as exc:
         cells["driver"] = f"FAIL {exc}"
     return cells

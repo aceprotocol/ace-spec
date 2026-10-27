@@ -120,8 +120,7 @@ def create(d: str, a, now: int) -> None:
     else:
         target = (verify_published_agent(read(a.prekey_agent), now=now) if a.prekey_agent else to).prekey
     content = content_for(a.kind, a, identity, self_agent, to.ace_id, now)
-    # The prekey offered to the recipient, or (--offer-prekey) arbitrary 1216 bytes for a tamper case.
-    offered = base64.b64decode(a.offer_prekey) if a.offer_prekey else vault.offer(to.ace_id, now).public_key
+    offered = vault.offer(to.ace_id, now).public_key  # the prekey offered to the recipient
     content["prekey"] = base64.b64encode(offered).decode()
     plaintext = encode_content(content["type"], content["schemaDigest"], content["body"], prekey=offered)
     packet = create_packet(identity, to.ace_id, target, plaintext, timestamp=now,
@@ -174,7 +173,7 @@ def main() -> None:
     ap.add_argument("dir")
     ap.add_argument("--now", type=int, default=os.environ.get("ACE_INTEROP_NOW"))
     for o in ("to-agent", "prekey-agent", "kind", "out", "message", "message-id", "ref-message-id",
-              "ref-prekey", "code", "note", "from-agent", "packet", "handle", "to-prekey", "offer-prekey"):
+              "ref-prekey", "code", "note", "from-agent", "packet", "handle", "to-prekey"):
         ap.add_argument("--" + o)
     a = ap.parse_args()
     if a.now is None:

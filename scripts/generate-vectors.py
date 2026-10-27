@@ -1112,7 +1112,7 @@ def dmsg_case(name, direction, from_: Agent, to: Agent, body, code, now=NOW, pin
     peers = PeerStore(MemoryStore(), clock=lambda: now)
     if pinned and direction == "receive":
         peers.pin(from_.kel, now)
-    rules = delegation_rules(peers, (to if direction == "receive" else from_).id)
+    rules = delegation_rules(peers)
     event = MessageEvent(direction, mid(900 + len(dmsg_cases)), from_.id, to.id, now, DELEGATION_TYPE, None)
     expect(f"delegation message {name}", lambda: rules.check(event, body), code)
     dmsg_cases.append({"name": name, "direction": direction, "from": from_.name, "to": to.name, "body": body, "now": now,
@@ -1143,7 +1143,7 @@ delegation = {
         "subject, now) succeeds or fails with 'error' (invalid_authorization): the closed {credentials} of 1-4 "
         "credentials with distinct issuers, each closed, subject == 'subject', issuer != subject, the issuedAt / "
         "expiresAt grammar above and a signature of the delegated-signature shape; no expiry, no signature check. "
-        "messages: delegationRules(peers, local).check({direction, from: agents[from].aceId, to: agents[to].aceId, "
+        "messages: delegationRules(peers).check({direction, from: agents[from].aceId, to: agents[to].aceId, "
         "type: 'ace:delegation:1', ...}, body) at clock 'now', where peers holds verifyKel(agents[from].kel, now) as the "
         "pin for 'from' iff senderPinned, succeeds (error null) or fails with invalid_body: credential.issuer == from, "
         "credential.subject == to, the credential's grammar and now < expiresAt, and on receive its signature verifies "

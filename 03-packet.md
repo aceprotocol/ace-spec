@@ -62,7 +62,7 @@ Normative reference: `draft-connolly-cfrg-xwing-kem-11` (this exact revision).
 | Ciphertext | `ct_M[1088] ‖ ct_X[32]`, 1120 bytes |
 | Shared secret | `SHA3-256(ss_M ‖ ss_X ‖ ct_X ‖ pk_X ‖ 0x5c2e2f2f5e5c)`, 32 bytes |
 
-Implementations MUST NOT add separate X25519 small-order or all-zero checks beyond what the draft specifies. An implementation MUST reproduce the draft's test vectors.
+Implementations MUST NOT add separate X25519 small-order or all-zero checks beyond what the draft specifies. Where the X25519 primitive itself refuses an all-zero output (common libraries do, with no way around it), the operation fails: `Encapsulate` as `invalid_argument` at the sender, `Decapsulate` as `decryption_failed` at the receiver ([06](06-delivery.md#receive-pipeline) step 6). A low-order value comes only from the party that supplied the key or the ciphertext, so either outcome affects only packets to or from that party. An implementation MUST reproduce the draft's test vectors.
 
 ## Signature
 

@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   ACEError, CONTACT_TYPE, MemoryStore, ProfileSet, RECEIPT_TYPE, SoftwareIdentity, StorePrekeyVault, checkPacketTime,
-  contactContent, createCardRecord, createDescriptor, verifyCardBundle, verifyKel, createPacket, createPermit, decodePacket, decryptPacket, receiptContent,
+  contactContent, createCardRecord, createDescriptor, verifyCardBundle, verifyKel, createPacket, createPermit, decodePacket, decodePrivateContent, decryptPacket, receiptContent,
   verifyPacketSignature, verifyPermit, verifyPublishedAgent, TEXT_TYPE, BUNDLED_MANIFESTS, messageDigest,
   checkReceiptBody, MAX_NOTE_BYTES, sha256Hex, fromBase64,
   type PrivateContent, type PublishedAgent,
@@ -103,7 +103,7 @@ async function open(dir: string, o: Record<string, string>, now: number) {
   if (sender.aceId !== packet.from) throw new ACEError('invalid_signature', 'packet is not from the given agent');
   verifyPacketSignature(packet, sender, now);
   checkPacketTime(packet, now);
-  const c = await decryptPacket(packet, vault);
+  const c = decodePrivateContent(await decryptPacket(packet, vault));
   profiles.validate(c.type, c.schemaDigest, c.body);
   const b = c.body as any;
   if (c.type === CONTACT_TYPE) {

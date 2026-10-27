@@ -44,7 +44,7 @@ A contact request is a packet ([03](03-packet.md)) whose private content has typ
 | `source` | The sender's PublishedAgent; MUST verify ([04](04-descriptor.md#verification)) and name `from` |
 | `permit` | Required when `kind` is `request` or `accepted`, absent when `rejected`: a reply permit issued by the sender (`issuer = from`) to the recipient (`subject = to`) |
 
-Contact packets are the only packets a receiver accepts from a sender whose KEL it has not pinned; the receiver verifies the outer signature with `source.kel` ([06](06-delivery.md#receive-pipeline)). Contact packets are neither retried nor receipted ([06](06-delivery.md#outbox-sender)). Contact content MUST NOT carry credentials or other secrets beyond the permit.
+A receiver accepts a packet from a sender whose KEL it has not pinned only as a contact candidate or a recovery candidate ([06](06-delivery.md#receive-pipeline)), verifying the packet signature under `source.kel`. Contact packets are neither retried nor receipted ([06](06-delivery.md#outbox-sender)). Contact content MUST NOT carry credentials or other secrets beyond the permit.
 
 ### Flow
 

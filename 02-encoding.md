@@ -88,11 +88,11 @@ Signing is FIPS 204 ML-DSA, hedged, with no pre-hash; verification is `ML-DSA.Ve
 |---|---|---|---|---|---|
 | `ml-dsa-65` | ML-DSA-65 (FIPS 204, NIST category 3) | root, signing key | 1952 bytes | 32-byte seed (FIPS 204 § 3.6.3) | 3309 bytes |
 
-`ml-dsa-65` is the only scheme. Key and signature objects carry `scheme`, so a later revision can add a scheme that an identity adopts by committing a next root of that scheme at a rotation ([01](01-identity.md#rotation-and-recovery)).
+`ml-dsa-65` is the only scheme; key and signature objects carry `scheme` so that a revision can add one ([06](06-delivery.md#security-considerations)).
 
 ### Delegated signatures
 
-Every signature except a KEL event signature is made by the delegated signing key with `seqOrEmpty = decimal(seq)`, where `seq` is the `seq` of the signing delegation. Its signature object is the closed `{scheme, seq, value}`: `scheme` is `ml-dsa-65`, `seq` a wire integer, `value` canonical Base64 of 3309 bytes (4412 characters). Verification follows [01](01-identity.md#operational-signatures). KEL event signatures are `{scheme, value}` with `seqOrEmpty` empty ([01](01-identity.md#key-event-log)).
+Every signature except a KEL event signature is a **delegated signature**: made by the delegated signing key, with `seq` the `seq` of its `dlg`. Its signature object is the closed `{scheme, seq, value}`: `scheme` is `ml-dsa-65`, `seq` a wire integer, `value` canonical Base64 of 3309 bytes (4412 characters). Verification follows [01](01-identity.md#operational-signatures). KEL event signatures are `{scheme, value}` with `seqOrEmpty` empty ([01](01-identity.md#key-event-log)).
 
 ### Signing actions
 

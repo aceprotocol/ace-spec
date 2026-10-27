@@ -2,8 +2,6 @@
 
 An optional official profile: a shared vocabulary for requesting quotes, agreeing terms, invoicing, proving payment and delivering work. Its manifest is [commerce.json](commerce.json) ([digests](../08-profiles.md#official-manifests)); its state rules are profile rules ([08](../08-profiles.md#profile-rules)).
 
-SDK note: SDKs provide these rules as `commerceRules()`.
-
 **A received commerce message never authorizes a payment.** Whether to pay, what to deliver and whether an amount is acceptable are application decisions. Settlement happens outside ACE; messages carry instructions and evidence only.
 
 ## Messages

@@ -29,7 +29,7 @@ A **profile** is a versioned set of message types with immutable schema digests.
 
 A conforming endpoint implements every core chapter, including the receive pipeline in [06](06-delivery.md#receive-pipeline) in its stated order, and reproduces the shared vectors. A conforming relay implements [07](07-relay.md). Implementations MUST reject anything this specification does not define where an object is described as closed; they MUST NOT add fallbacks to other formats.
 
-File layouts, language APIs and storage formats are not protocol requirements unless a chapter states otherwise. Lines marked **SDK note** are informative.
+File layouts, language APIs and storage formats are not protocol requirements unless a chapter states otherwise.
 
 ## Trust boundaries
 

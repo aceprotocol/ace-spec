@@ -37,15 +37,11 @@ A cached descriptor is bound to the KEL states it was verified under. A client u
 
 `prekey.publicKey` is the canonical Base64 of a 1216-byte X-Wing public key ([03](03-packet.md#x-wing)); `prekey.id` is the lowercase hex SHA-256 of those 1216 bytes. A verifier recomputes the ID.
 
-- An agent MAY rotate its prekey whenever it publishes a descriptor; the reference implementation rotates every 24 hours. Agents SHOULD NOT rotate more than `MAX_RETAINED_PREKEYS` times per `OFFLINE_WINDOW_SECONDS`.
+- An agent MAY rotate its prekey whenever it publishes a descriptor, and SHOULD NOT rotate more than `MAX_RETAINED_PREKEYS` times per `OFFLINE_WINDOW_SECONDS`.
 - When a prekey is superseded, the agent keeps its seed for `OFFLINE_WINDOW_SECONDS` after the moment of supersession, then deletes it. It keeps at most `MAX_RETAINED_PREKEYS` superseded seeds, deleting the oldest first.
 - A packet referencing a prekey the agent does not hold is rejected with `unknown_prekey` ([06](06-delivery.md#receive-pipeline)).
-- Prekey seeds are secrets protected like identity seeds: in a key store readable only by the owner (file mode 0600) or sealed by hardware where available.
+- Prekey seeds are secrets protected like identity seeds.
 - A superseded prekey whose retention has ended MUST NOT open a packet, even when its seed has not been deleted yet. Implementations delete expired seeds whenever they open a packet or rotate, not only on publication.
-
-SDK note: see [§ Peer prekeys](#peer-prekeys) for the `PrekeyVault` surface.
-
-The forward-secrecy window of a packet encrypted to a published prekey is the retention period ([06](06-delivery.md#security-considerations)).
 
 ## Peer prekeys
 
@@ -63,8 +59,6 @@ Besides its published prekey, an endpoint offers each peer a **peer prekey**: an
 
 - A packet that opened (step 6) and whose sender is pinned, at step 3 or by the recovery path ([05](05-admission.md#admission-recovery)), records its `prekey` as the held key for `from` when the packet's `timestamp` is greater than the held key's, bound to the pin state (the digest of the last pinned KEL event) it was authenticated under; duplicates at step 9 record too. A contact packet, and any packet whose sender has no pin when it is processed, records nothing.
 - The held key is used only while the peer's pin is the one it is bound to and less than `OFFLINE_WINDOW_SECONDS` have passed since the timestamp of the packet that carried it. It is dropped when the peer is blocked and when a receipt `rejected:unknown_prekey` names it.
-
-SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId, sender)`, `prune(now)`, `offer(peer, now)`, `used(peer, prekeyId)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open` covers published and peer seeds.
 
 ## Card record
 
@@ -92,7 +86,7 @@ A card record does not expire: it stands until a newer `issuedAt` replaces it or
 
 A client that has verified a card record for an identity MUST NOT accept one with an older `issuedAt`, nor one with an equal `issuedAt` and different claims (`stale_descriptor`). It keeps the highest `issuedAt` and the claims digest at it for each identity, durably, and checks them before the handle rule below.
 
-A card record cannot be revoked by a newer one alone: a holder of the signing key can sign records, including `pay` accounts, until a new `dlg` replaces that key, and a client that has not pinned the identity's KEL accepts any record signed under a delegation within its `notAfter`. Revoking a `pay` account therefore requires a new `dlg`. A client SHOULD pin the identity's KEL, by looking up its descriptor ([§ Verification](#verification)), before relying on `pay`. When the descriptor lookup answers `unknown_peer` at every relay it asked (the identity has no live descriptor), a client MAY verify the card against the bundle's own KEL and pin that KEL under the same rules; it MUST surface that the KEL was not confirmed live. A transient or other failure at any relay asked MUST NOT trigger this fallback: the lookup fails instead. A KEL pinned this way is reported as not confirmed live, durably, until a live descriptor reconciled with the pin confirms it; until then the client looks the descriptor up again on each card lookup. Confirmed live means a relay served a verified descriptor under that KEL, not that the KEL is the identity's newest. A client MUST NOT present the `pay` accounts of a record whose KEL is not confirmed live as confirmed. A key holder can sign `issuedAt` up to `now + TIMESTAMP_WINDOW_SECONDS`, so after the `dlg` the owner's re-signed record can be refused as `stale_descriptor` for up to `TIMESTAMP_WINDOW_SECONDS`.
+A card record cannot be revoked by a newer one alone: the signing key can sign records, `pay` accounts included, until a new `dlg` replaces it ([06](06-delivery.md#security-considerations)), so revoking a `pay` account requires a new `dlg`. A client SHOULD pin the identity's KEL, by looking up its descriptor ([§ Verification](#verification)), before relying on `pay`. When the descriptor lookup answers `unknown_peer` at every relay it asked (the identity has no live descriptor), a client MAY verify the card against the bundle's own KEL and pin that KEL under the same rules; it MUST surface that the KEL was not confirmed live. A transient or other failure at any relay asked MUST NOT trigger this fallback: the lookup fails instead. A KEL pinned this way is reported as not confirmed live, durably, until a live descriptor reconciled with the pin confirms it; until then the client looks the descriptor up again on each card lookup. Confirmed live means a relay served a verified descriptor under that KEL, not that the KEL is the identity's newest. A client MUST NOT present the `pay` accounts of a record whose KEL is not confirmed live as confirmed.
 
 Every registered agent's unexpired descriptor can be looked up by ACE ID ([07](07-relay.md#descriptors-and-cards)); `contact` and `listed` decide only who may request contact and whether the agent is listed. A client looking up a card record by ACE ID asks the relays of the identity's descriptor in listed order until one serves it.
 
@@ -127,7 +121,7 @@ A delegation entry is the closed object `{kel, credential}`. It states one edge 
 signed by the issuer with action `delegation`, `aceId = issuer`, `timestamp = issuedAt` and payload `canonicalStateBytes(claims)`. An entry is valid when, in order:
 
 1. `issuer != subject`, `subject` equals the descriptor's `aceId`, `issuedAt <= now + TIMESTAMP_WINDOW_SECONDS`, `issuedAt < expiresAt`, `expiresAt - issuedAt <= MAX_DELEGATION_LIFETIME`, and issuers are distinct across entries;
-2. `kel` verifies and its ACE ID equals `issuer`; when the verifier has pinned the issuer, `kel` is reconciled with that pin under [01](01-identity.md#pinning) (a fork, or a carried prefix whose credential is signed by a superseded delegation, invalidates the entry) and the reconciled state is used from here on;
+2. `kel` verifies and its ACE ID equals `issuer`; when the verifier has pinned the issuer, `kel` is reconciled with that pin under [01](01-identity.md#pinning) and the reconciled state is used from here on;
 3. the signature verifies as an operational signature of that state;
 4. `now < expiresAt` (otherwise the entry is expired and dropped).
 
@@ -136,5 +130,3 @@ signed by the issuer with action `delegation`, `aceId = issuer`, `timestamp = is
 An `erc8004` entry is the closed object `{agentRegistry, agentId}` binding the ACE identity to an ERC-8004 agent. `agentRegistry` is the CAIP-10 account of the registry (`^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$`, for example `eip155:8453:0x…`; any chain); `agentId` is the registry's chain-native agent identifier: when the registry's CAIP-2 namespace (the part of `agentRegistry` before the first `:`) is `eip155`, a decimal string matching `^(0|[1-9][0-9]{0,77})$` (the ERC-721 token ID); for any other namespace, 1–128 characters matching `^[A-Za-z0-9]{1,128}$` (for example a Solana base58 address). Entries are distinct.
 
 The binding holds only when both directions hold: the signed descriptor names the on-chain agent, and that agent's registration file (its `tokenURI`) contains a service entry `{"name": "ACE", "endpoint": "<aceId>"}`. A registration file confirms the binding exactly when it is a JSON object whose `services` array contains an object with `name` equal to `"ACE"` and `endpoint` equal to the ACE ID. Reading the chain and the `tokenURI` is the host's task; the core contains no chain client. ACE defines no chain signature format.
-
-SDK note: SDKs provide this check as the pure function `verifyErc8004Registration(registrationJson, aceId) -> bool`.

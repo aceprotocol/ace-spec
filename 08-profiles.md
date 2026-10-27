@@ -70,8 +70,6 @@ Rules that a schema cannot express (references between messages, state machines,
 - **check** runs on `send` before the Outbox entry is persisted (before encryption for receipts and contacts, which bypass the Outbox) and on `receive` at pipeline step 10 ([06](06-delivery.md#receive-pipeline)). It reads state only and fails with an ACE error whose code becomes the `rejected` receipt code.
 - **commit** applies state changes, idempotently per `(from, messageId)`. On `receive` it runs inside the transaction that persists the delivery record; on `send`, as below.
 
-SDK note: the Inbox and Outbox take `rules: ProfileRules[]`, each `{types, check(event, body), commit(event, body)}`.
-
 ### Sender state and busy threads
 
 A message is **governed** when some installed rule lists its type. For a governed message with a `threadId`, the thread `(peer, threadId)` is **busy** while such a message from the local agent is pending in its Outbox. The sender:

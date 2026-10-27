@@ -64,7 +64,7 @@ Besides its published prekey, an endpoint offers each peer a **peer prekey**: an
 - A packet that opened (step 6) and whose sender is pinned, at step 3 or by the recovery path ([05](05-admission.md#admission-recovery)), records its `prekey` as the held key for `from` when the packet's `timestamp` is greater than the held key's, bound to the pin state (the digest of the last pinned KEL event) it was authenticated under; duplicates at step 9 record too. A contact packet, and any packet whose sender has no pin when it is processed, records nothing.
 - The held key is used only while the peer's pin is the one it is bound to and less than `OFFLINE_WINDOW_SECONDS` have passed since the timestamp of the packet that carried it. It is dropped when the peer is blocked and when a receipt `rejected:unknown_prekey` names it.
 
-SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId, sender)`, `prune(now)`, `offer(peer, now)`, `used(peer, prekeyId, now)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open` covers published and peer seeds.
+SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId, sender)`, `prune(now)`, `offer(peer, now)`, `used(peer, prekeyId)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open` covers published and peer seeds.
 
 ## Card record
 

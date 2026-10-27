@@ -1774,7 +1774,7 @@ pipeline = {
         "duplicate like any packet); a packet beyond the replay horizon "
         "is dropped with record code replay_horizon and no receipt. Every content carries 'prekey' (the key the sender "
         "offers the receiver); the receiver strips it before validation. After step 6 opens a packet under the key offered "
-        "to its sender, that key becomes the sender's in-use key (used(from, prekeyId, now)). An optional 'vaultAfter' "
+        "to its sender, that key becomes the sender's in-use key (used(from, prekeyId)). An optional 'vaultAfter' "
         "{peer: aceId, inUse: prekeyId} is the receiver vault after the last step: peers[peer].inUse is that key, the key "
         "offered to peer (if any; a receipt to peer offers a fresh one) is a different one, and open(inUse, sender = "
         "peer) still succeeds (unknown_prekey for any other sender). Its optional 'held' {publicKey, timestamp} is the holder "

@@ -60,7 +60,7 @@ Normative reference: `draft-connolly-cfrg-xwing-kem-11` (this exact revision).
 | Item | Value |
 |---|---|
 | Private key | 32-byte seed; `expanded = SHAKE256(seed, 96)`, `expanded[0:64]` is the ML-KEM-768 key-generation seed `(d, z)`, `expanded[64:96]` the X25519 secret |
-| Public key | `pk_M[1184] ‖ pk_X[32]`, 1216 bytes |
+| Public key | `pk_M[1184] ‖ pk_X[32]`, 1216 bytes; `pk_M` passes the FIPS 203 modulus check (a key that does not is not an X-Wing public key); any 32 bytes are a valid `pk_X` |
 | Ciphertext | `ct_M[1088] ‖ ct_X[32]`, 1120 bytes |
 | Shared secret | `SHA3-256(ss_M ‖ ss_X ‖ ct_X ‖ pk_X ‖ 0x5c2e2f2f5e5c)`, 32 bytes |
 

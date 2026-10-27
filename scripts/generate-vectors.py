@@ -12,7 +12,8 @@ sdk-py. Each section carries a ``rules`` string telling consumers exactly what t
 Deterministic: identities (seeds derived from labels), prekeys, X-Wing encapsulations (the draft's
 own vectors), nonces, message IDs and every byte string that does not contain an ML-DSA signature.
 Hedged ML-DSA signatures (KEL ``sig`` values, operational signatures, auth headers) change on every
-run: consumers verify them and never compare them. Relay-side checks (auth headers, registration)
+run: consumers verify them and never compare them; so do the encapsulations to peer prekeys (packets
+encrypted to a key from ``peerSeeds``), which have no draft vector. Relay-side checks (auth headers, registration)
 are self-checked by the small reference verifiers below, written from 07; sdk-py ships none.
 """
 
@@ -49,8 +50,8 @@ from ace.commerce import ThreadStore, commerce_rules, validate_commerce_ext
 from ace.delegation import validate_erc8004
 from ace.identity import sign_claims
 from ace.kel import create_inception, create_rotation, create_signing_delegation, event_bytes
-from ace.packet import aead_key, check_window, packet_header, packet_sign_payload
-from ace.prekeys import _entry, _State
+from ace.packet import aead_key, check_window, pad_plaintext, packet_header, packet_sign_payload
+from ace.prekeys import _entry, _Peer, _State
 from ace.relay import map_relay_response
 from ace.rules import MessageEvent
 from ace.store import MemoryStore
@@ -171,6 +172,14 @@ BOB_PREKEY_SEED = XWING[0]["seed"]  # bob's current prekey is the draft's first 
 BOB_PREKEY = prekey_of(BOB_PREKEY_SEED)
 OTHER_PREKEY = prekey_of(XWING[1]["seed"])  # a prekey bob does not hold
 ALICE_PREKEY = prekey_of(seed("alice-prekey").hex())
+# Peer prekeys (04 § Peer prekeys): X_OFFER_Y is the key X's vault offered Y (Y encrypts to it).
+ALICE_OFFER_BOB_SEED = seed("alice-offer-bob").hex()
+ALICE_OFFER_BOB = prekey_of(ALICE_OFFER_BOB_SEED)  # the prekey alice's contents carry to bob
+BOB_OFFER_ALICE_SEED = seed("bob-offer-alice").hex()
+BOB_OFFER_ALICE = prekey_of(BOB_OFFER_ALICE_SEED)  # bob's vault offered it to alice
+BOB_OFFER_CAROL_SEED = seed("bob-offer-carol").hex()
+BOB_OFFER_CAROL = prekey_of(BOB_OFFER_CAROL_SEED)  # bob's vault offered it to carol
+CAROL_OFFER_BOB = prekey_of(seed("carol-offer-bob").hex())  # the prekey carol's contents carry to bob
 
 # =============================================================================== encoding
 
@@ -532,8 +541,11 @@ SALT = b""  # 03 § Encryption: HKDF salt is the empty string
 PKT_MID = "550e8400-e29b-41d4-a716-446655440000"
 PKT_NONCE = bytes(range(12))
 TEXT_DIGEST = TEXT.messages["ace:text:1"].digest
-CONTENT = {"type": "ace:text:1", "schemaDigest": TEXT_DIGEST, "threadId": "thread-1", "body": {"message": "hello, bob"}}
-PLAINTEXT = canonical_state_bytes(CONTENT)
+CONTENT = {"type": "ace:text:1", "schemaDigest": TEXT_DIGEST, "threadId": "thread-1", "body": {"message": "hello, bob"},
+           "prekey": ALICE_OFFER_BOB["publicKey"]}
+CONTENT_BYTES = canonical_state_bytes(CONTENT)
+PLAINTEXT = pad_plaintext(CONTENT_BYTES)  # 03 § Encryption: u32be(len) || content || zeros to the bucket
+assert len(PLAINTEXT) == 4096 and PLAINTEXT == len(CONTENT_BYTES).to_bytes(4, "big") + CONTENT_BYTES + bytes(4092 - len(CONTENT_BYTES))
 KEM = bytes.fromhex(XWING[0]["ciphertext"])
 SS = bytes.fromhex(XWING[0]["sharedSecret"])
 header = packet_header(alice.id, bob.id, PKT_MID, NOW, BOB_PREKEY["id"], KEM)
@@ -541,27 +553,30 @@ AEAD_KEY = HKDF(algorithm=hashes.SHA256(), length=32, salt=SALT, info=header).de
 assert AEAD_KEY == aead_key(SS, header)
 payload = PKT_NONCE + AESGCM(AEAD_KEY).encrypt(PKT_NONCE, PLAINTEXT, header)
 
-det_packet = create_packet(alice.identity, bob.id, BOB_PREKEY, PLAINTEXT, timestamp=NOW, message_id=PKT_MID, _kem=(SS, KEM), _nonce=PKT_NONCE)
+det_packet = create_packet(alice.identity, bob.id, BOB_PREKEY, CONTENT_BYTES, timestamp=NOW, message_id=PKT_MID, _kem=(SS, KEM), _nonce=PKT_NONCE)
 assert det_packet["encryption"] == {"prekey": BOB_PREKEY["id"], "kemCiphertext": b64(KEM), "payload": b64(payload)}
 sign_payload = packet_sign_payload(bob.id, PKT_MID, BOB_PREKEY["id"], KEM, payload)
 packet_message = signing_message(alice.id, NOW, alice.seq, sign_payload)
 assert verify_signature(packet_message, "packet", base64.b64decode(det_packet["signature"]["value"]), alice.signing.public_key())
 
 
-def bob_vault():
+def bob_vault(peer_seeds=None):
+    """bob's vault: his published current prekey, and for each ``peer_seeds`` entry (aceId -> seed hex) the
+    peer prekey offered to that peer, offeredAt NOW (test-only injection)."""
     v = PrekeyVault()
-    v._state = _State(_entry(bytes.fromhex(BOB_PREKEY_SEED), T0), [])  # test-only injection
+    peers = {pid: _Peer(offered=_entry(bytes.fromhex(sd), NOW)) for pid, sd in (peer_seeds or {}).items()}
+    v._state = _State(_entry(bytes.fromhex(BOB_PREKEY_SEED), T0), [], peers)
     return v
 
 
-def open_pkt(pkt, recipient, sender: Agent, now):
+def open_pkt(pkt, recipient, sender: Agent, now, peer_seeds=None):
     """06 steps 1, 4, 5, 6 and the private-content parse of 7."""
     p = decode_packet(pkt)
     if p.to_id != recipient:
         raise ACEError("wrong_recipient", "")
     verify_packet(p, verify_kel(sender.kel, now), now)
     check_window(p, now)
-    return PrivateMessage.of(p, decode_content(decrypt_packet(p, bob_vault(), now)))
+    return PrivateMessage.of(p, decode_content(decrypt_packet(p, bob_vault(peer_seeds), now)))
 
 
 msg = open_pkt(det_packet, bob.id, alice, NOW)
@@ -610,6 +625,8 @@ dec_case("uppercase prekey id", mutate(P, ["encryption", "prekey"], BOB_PREKEY["
 dec_case("kemCiphertext of 1119 bytes", mutate(P, ["encryption", "kemCiphertext"], b64(KEM[:-1])), "invalid_packet")
 dec_case("non-canonical payload Base64", mutate(P, ["encryption", "payload"], P["encryption"]["payload"].rstrip("=") ), "invalid_packet")
 dec_case("payload of 27 bytes", mutate(P, ["encryption", "payload"], b64(bytes(27))), "invalid_packet")
+dec_case("payload of 4123 bytes: not a bucket", mutate(P, ["encryption", "payload"], b64(bytes(4123))), "invalid_packet")
+dec_case("payload of 4124 bytes: bucket 4096", mutate(P, ["encryption", "payload"], b64(bytes(4124))), None)
 dec_case("signature scheme ml-dsa-44", mutate(P, ["signature", "scheme"], "ml-dsa-44"), "invalid_packet")
 dec_case("signature seq as a string", mutate(P, ["signature", "seq"], "1"), "invalid_packet")
 dec_case("signature of 3308 bytes", mutate(P, ["signature", "value"], b64(bytes(3308))), "invalid_packet")
@@ -619,12 +636,12 @@ dec_case("not an object", [P], "invalid_packet")
 open_cases = []
 
 
-def open_case(name, pkt, sender, now, code, recipient=None):
+def open_case(name, pkt, sender, now, code, recipient=None, peer_seeds=None):
     recipient = bob.id if recipient is None else recipient
-    expect(f"open {name}", lambda: open_pkt(pkt, recipient, AGENTS[sender] if isinstance(sender, str) else sender, now), code)
+    expect(f"open {name}", lambda: open_pkt(pkt, recipient, AGENTS[sender] if isinstance(sender, str) else sender, now, peer_seeds), code)
     rname = next(n for n, a in AGENTS.items() if a.id == recipient)
     open_cases.append({"name": name, "packet": pkt, "sender": sender if isinstance(sender, str) else sender.name, "recipient": rname,
-                       "now": now, "error": code})
+                       "now": now, **({"peerSeeds": peer_seeds} if peer_seeds else {}), "error": code})
 
 
 def flip_b64(text, index):
@@ -633,8 +650,12 @@ def flip_b64(text, index):
     return b64(bytes(raw))
 
 
-def manual_packet(sender: Agent, to, prekey, content, ts, *, seq=None, kem=KEM, ss=SS, mid_=PKT_MID, nonce=PKT_NONCE):
-    pt = canonical_state_bytes(content) if isinstance(content, dict) else content
+def manual_packet(sender: Agent, to, prekey, content, ts, *, seq=None, kem=KEM, ss=SS, mid_=PKT_MID, nonce=PKT_NONCE, padded=None):
+    """``content``: a dict (canonical JSON) or raw content bytes, padded (03 § Encryption); ``padded``: the exact
+    plaintext instead (padding faults). ``kem=None``: a fresh encapsulation to ``prekey``."""
+    if kem is None:
+        ss, kem = _xwing.encapsulate(base64.b64decode(prekey["publicKey"]))
+    pt = padded if padded is not None else pad_plaintext(canonical_state_bytes(content) if isinstance(content, dict) else content)
     hdr = packet_header(sender.id, to, mid_, ts, prekey["id"], kem)
     k = HKDF(algorithm=hashes.SHA256(), length=32, salt=SALT, info=hdr).derive(ss)
     pl = nonce + AESGCM(k).encrypt(nonce, pt, hdr)
@@ -666,6 +687,23 @@ open_case("plaintext is not private content: invalid_body",
           manual_packet(alice, bob.id, BOB_PREKEY, b'{"type":"ace:text:1","body":{}}', NOW), "alice", NOW, "invalid_body")
 open_case("AEAD key from the wrong shared secret: decryption_failed",
           manual_packet(alice, bob.id, BOB_PREKEY, CONTENT, NOW, ss=bytes(32)), "alice", NOW, "decryption_failed")
+# peer prekeys (04 § Peer prekeys): a key bob's vault offered a peer opens only that peer's packets
+open_case("opened under a peer prekey", manual_packet(alice, bob.id, BOB_OFFER_ALICE, CONTENT, NOW, kem=None), "alice", NOW, None,
+          peer_seeds={alice.id: BOB_OFFER_ALICE_SEED})
+open_case("peer prekey of another peer: unknown_prekey", manual_packet(alice, bob.id, BOB_OFFER_CAROL, CONTENT, NOW, kem=None),
+          "alice", NOW, "unknown_prekey", peer_seeds={carol.id: BOB_OFFER_CAROL_SEED})
+# padding (03 § Encryption): the AEAD opens, the padded plaintext is malformed
+_bad_pad = bytearray(PLAINTEXT)
+_bad_pad[-1] = 1
+open_case("non-zero padding: invalid_body", manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=bytes(_bad_pad)),
+          "alice", NOW, "invalid_body")
+open_case("length prefix past the plaintext: invalid_body",
+          manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=(4093).to_bytes(4, "big") + PLAINTEXT[4:]), "alice", NOW, "invalid_body")
+open_case("bucket mismatch: 8192 plaintext with prefix 10: invalid_body",
+          manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=(10).to_bytes(4, "big") + b'{"a":"bc"}' + bytes(8178)),
+          "alice", NOW, "invalid_body")
+open_case("content missing prekey: invalid_body",
+          manual_packet(alice, bob.id, BOB_PREKEY, {k: v for k, v in CONTENT.items() if k != "prekey"}, NOW), "alice", NOW, "invalid_body")
 
 packet = {
     "rules": (
@@ -674,15 +712,25 @@ packet = {
         "payload = nonce || AES-256-GCM(key, nonce, plaintext, aad = header) == payloadHex; createPacket with the injected "
         "(sharedSecret, kemCiphertext, nonce) reproduces packet.encryption exactly; signPayloadHex = encodePayload(to, "
         "messageId, prekeyId, kemCiphertext, payload) and messageHex = M(from, timestamp, seq, signPayload), over which "
-        "packet.signature verifies against agents.alice with ctx 'packet'. The receiver vault holds only prekeySeed "
-        "(agents.bob's current prekey). decode: decodePacket on 'packet' (or on the parse of 'json') fails with 'error' or "
-        "succeeds (null). open: decode -> to must be agents[recipient] (wrong_recipient) -> operational signature against "
-        "verifyKel(agents[sender].kel, now), the sender usable at now -> window now-604800 <= ts <= now+300 -> decrypt "
-        "with the vault -> private content; 'error' null means it opens."
+        "packet.signature verifies against agents.alice with ctx 'packet'. Padding (03 § Encryption): contentHex = "
+        "canonical JSON of 'content'; plaintextHex = pad(content) = u32be(len(content)) || content || zero bytes up to "
+        "bucket(len(content) + 4), where bucket(n) = the smallest power of two >= max(n, 4096) for n <= 2^20, else "
+        "1179652 (MAX_PLAINTEXT_BYTES + 4); BUCKETS = {4096, 8192, ..., 1048576, 1179652}. The receiver unpads: "
+        "len(pt) in BUCKETS, n = u32be(pt[0:4]) <= 1179648, 4 + n <= len(pt), bucket(n + 4) == len(pt), pt[4+n:] all zero, "
+        "else invalid_body; the content is pt[4:4+n]. 'content.prekey' is the peer prekey alice offers bob (04 § Peer "
+        "prekeys). The receiver vault holds prekeySeed (agents.bob's current prekey). decode: decodePacket on 'packet' (or "
+        "on the parse of 'json') fails with 'error' or succeeds (null); the decoded payload length minus 28 (nonce + tag) "
+        "must be in BUCKETS (invalid_packet). open: decode -> to must be agents[recipient] (wrong_recipient) -> "
+        "operational signature against verifyKel(agents[sender].kel, now), the sender usable at now -> window "
+        "now-604800 <= ts <= now+300 -> decrypt with the vault, passing the sender (unknown_prekey, decryption_failed) -> "
+        "unpad (invalid_body) -> private content (invalid_body); 'error' null means it opens. An optional 'peerSeeds' "
+        "{aceId: seedHex} means the receiver vault also holds, for each aceId, that seed as the peer prekey it offered "
+        "that peer (peers[aceId].offered = {seed, offeredAt: the vectors' top-level now}, inUse and held null): it opens a "
+        "packet from that aceId naming its ID (sha256 of its public key), and is unknown_prekey for any other sender."
     ),
     "deterministic": {
         "sender": "alice", "recipient": "bob", "prekeySeed": BOB_PREKEY_SEED, "prekey": BOB_PREKEY, "messageId": PKT_MID,
-        "timestamp": NOW, "content": CONTENT, "plaintextHex": PLAINTEXT.hex(), "sharedSecret": SS.hex(), "kemCiphertext": KEM.hex(),
+        "timestamp": NOW, "content": CONTENT, "contentHex": CONTENT_BYTES.hex(), "plaintextHex": PLAINTEXT.hex(), "sharedSecret": SS.hex(), "kemCiphertext": KEM.hex(),
         "nonce": PKT_NONCE.hex(), "saltHex": SALT.hex(), "headerHex": header.hex(), "keyHex": AEAD_KEY.hex(),
         "payloadHex": payload.hex(), "signPayloadHex": sign_payload.hex(), "messageHex": packet_message.hex(),
         "packet": det_packet,
@@ -743,10 +791,19 @@ pc("admission null", cj({**CONTENT, "admission": None}), "invalid_body")
 pc("admission without source", cj({**CONTENT, "admission": {"proof": _ADM["proof"], "permit": _ADM["permit"]}}), "invalid_body")
 pc("admission with an unknown member", cj({**CONTENT, "admission": {**_ADM, "extra": {}}}), "invalid_body")
 pc("admission proof not an object", cj({**CONTENT, "admission": {**_ADM, "proof": "permit"}}), "invalid_body")
-_RECEIPT = {"type": "ace:receipt:1", "schemaDigest": CORE.messages["ace:receipt:1"].digest, "body": {"messageId": "550e8400-e29b-41d4-a716-446655440000", "outcome": "delivered"}}
+_RECEIPT = {"type": "ace:receipt:1", "schemaDigest": CORE.messages["ace:receipt:1"].digest, "body": {"messageId": "550e8400-e29b-41d4-a716-446655440000", "outcome": "delivered"},
+            "prekey": ALICE_OFFER_BOB["publicKey"]}
 pc("receipt with admission", cj({**_RECEIPT, "admission": _ADM}), "invalid_body")
+pc("valid receipt", cj(_RECEIPT), None)
+pc("missing prekey", cj({k: v for k, v in CONTENT.items() if k != "prekey"}), "invalid_body")
+pc("prekey of 1215 bytes", cj({**CONTENT, "prekey": b64(base64.b64decode(CONTENT["prekey"])[:-1])}), "invalid_body")
+pc("prekey non-canonical base64", cj({**CONTENT, "prekey": CONTENT["prekey"].rstrip("=")}), "invalid_body")
+pc("prekey null", cj({**CONTENT, "prekey": None}), "invalid_body")
 private_content = {
-    "rules": "decodePrivateContent(UTF-8 'text' or hex-decoded 'hex') fails with 'error' (always invalid_body) or succeeds (null).",
+    "rules": ("decodePrivateContent(UTF-8 'text' or hex-decoded 'hex'; the content after unpadding) fails with 'error' "
+              "(always invalid_body) or succeeds (null). Content is the closed object {type, schemaDigest, threadId?, body, "
+              "prekey, admission?}: 'prekey' is required on every packet (receipts and contacts too) and is the canonical "
+              "Base64 of a 1216-byte X-Wing public key (04 § Peer prekeys)."),
     "cases": pc_cases,
 }
 
@@ -1533,7 +1590,7 @@ def run_sender(steps):
     clock = {"t": NOW}
     store = MemoryStore()
     rules = commerce_rules(store, alice.id)
-    ob = Outbox(alice.identity, store, Profiles([TEXT, COMMERCE]), rules=[rules], clock=lambda: clock["t"])
+    ob = Outbox(alice.identity, store, Profiles([TEXT, COMMERCE]), vault=PrekeyVault(), rules=[rules], clock=lambda: clock["t"])
     conv = conversation_key(alice.id, bob.id)
     out = []
     for i, (op, a, want) in enumerate(steps):
@@ -1617,20 +1674,25 @@ CONTACT_SOURCE = published({**BASE, "issuedAt": NOW - 7300, "expiresAt": NOW + 3
 RECEIPT_SEEDS = {alice.id: seed("alice-prekey").hex(), carol.id: CAROL_PREKEY_SEED}
 
 
-def text_packet(sender: Agent, n: int, ts: int) -> dict:
-    return manual_packet(sender, bob.id, BOB_PREKEY, CONTENT, ts, mid_=mid(n))
+OFFERS_TO_BOB = {alice.id: ALICE_OFFER_BOB, carol.id: CAROL_OFFER_BOB}  # the prekey each sender's contents carry
+
+
+def text_packet(sender: Agent, n: int, ts: int, to_prekey=BOB_PREKEY) -> dict:
+    content = {**CONTENT, "prekey": OFFERS_TO_BOB[sender.id]["publicKey"]}
+    return manual_packet(sender, bob.id, to_prekey, content, ts, mid_=mid(n), kem=KEM if to_prekey is BOB_PREKEY else None)
 
 
 def contact_packet(n: int, ts: int) -> dict:
     body = {"kind": "request", "profile": TEXT.id, "note": "hello", "source": CONTACT_SOURCE,
             "permit": permit_doc(alice, bob.id, NOW - 7300, NOW - 7300 + 2592000)}
-    content = {"type": "ace:contact:1", "schemaDigest": D["ace:contact:1"], "body": body}
+    content = {"type": "ace:contact:1", "schemaDigest": D["ace:contact:1"], "body": body, "prekey": ALICE_OFFER_BOB["publicKey"]}
     return manual_packet(alice, bob.id, BOB_PREKEY, content, ts, mid_=mid(n))
 
 
 def receipt_packet(n: int, ts: int, about: str) -> dict:
     """A receipt from alice to bob for bob's message ``about``."""
-    content = {"type": "ace:receipt:1", "schemaDigest": D["ace:receipt:1"], "body": {"messageId": about, "outcome": "delivered"}}
+    content = {"type": "ace:receipt:1", "schemaDigest": D["ace:receipt:1"], "body": {"messageId": about, "outcome": "delivered"},
+               "prekey": ALICE_OFFER_BOB["publicKey"]}
     return manual_packet(alice, bob.id, BOB_PREKEY, content, ts, mid_=mid(n))
 
 
@@ -1640,13 +1702,13 @@ def receipt_of(out) -> str | None:
         return None
     p = decode_packet(out.receipt.packet)
     v = PrekeyVault()
-    v._state = _State(_entry(bytes.fromhex(RECEIPT_SEEDS[p.to_id]), T0), [])
+    v._state = _State(_entry(bytes.fromhex(RECEIPT_SEEDS[p.to_id]), T0), [], {})
     content = decode_content(decrypt_packet(p, v, NOW))
     assert content["type"] == "ace:receipt:1"
     return content["body"]["outcome"]
 
 
-def pipeline_case(name, steps, *, contact="closed", capacity=100_000, pinned=()):
+def pipeline_case(name, steps, *, contact="closed", capacity=100_000, pinned=(), peer_seeds=None, vault_after=None):
     clock = {"t": NOW}
     store = MemoryStore()
     peers = PeerStore(store, clock=lambda: clock["t"])
@@ -1655,7 +1717,8 @@ def pipeline_case(name, steps, *, contact="closed", capacity=100_000, pinned=())
         peers.adopt(pa, NOW)
         peers.set_status(agent.id, "admitted")
         pins[agent.name] = pa
-    inbox = Inbox.open(bob.identity, store, bob_vault(), peers, Profiles(), on_message=lambda m: None, contact=contact,
+    vault = bob_vault(peer_seeds)
+    inbox = Inbox.open(bob.identity, store, vault, peers, Profiles(), on_message=lambda m: None, contact=contact,
                        capacity=capacity, clock=lambda: clock["t"])
     out_steps = []
     for packet_, now, want in steps:
@@ -1666,7 +1729,18 @@ def pipeline_case(name, steps, *, contact="closed", capacity=100_000, pinned=())
         assert got == want, (name, got, want)
         out_steps.append({"packet": packet_, "now": now, "expect": want})
     inbox.close()
-    return {"name": name, "receiver": "bob", "contact": contact, "capacity": capacity, "admitted": pins, "steps": out_steps}
+    case = {"name": name, "receiver": "bob", "contact": contact, "capacity": capacity, "admitted": pins,
+            **({"peerSeeds": peer_seeds} if peer_seeds else {}), "steps": out_steps}
+    if vault_after is not None:
+        # the offered key the steps opened under became the in-use key (the receipt to peer offered a fresh one);
+        # the in-use one still opens for peer only
+        p = vault._state.peers[vault_after["peer"]]
+        assert p.in_use is not None and p.in_use.prekey.id == vault_after["inUse"], name
+        assert p.offered is None or p.offered.prekey.id != vault_after["inUse"], name
+        vault.open(vault_after["inUse"], clock["t"], sender=vault_after["peer"])
+        assert outcome(lambda: vault.open(vault_after["inUse"], clock["t"], sender=carol.id)) == "unknown_prekey"
+        case["vaultAfter"] = vault_after
+    return case
 
 
 def X(disposition, code=None, receipt=None):
@@ -1690,6 +1764,11 @@ pipeline_cases = [
         (text_packet(carol, 911, NOW + 50), NOW + 60, X("delivered", receipt="delivered")),
         (text_packet(carol, 910, NOW + 50), NOW + 150, X("drop", "stale_peer_binding")),
     ], pinned=[(carol, CAROL_PA)]),
+    pipeline_case("first message opened under offered key is delivered", [
+        (text_packet(alice, 940, NOW - 10, BOB_OFFER_ALICE), NOW, X("delivered", receipt="delivered")),
+        (text_packet(alice, 941, NOW - 5, BOB_OFFER_ALICE), NOW, X("delivered", receipt="delivered")),  # in use: still opens
+    ], pinned=[(alice, BASE_PA)], peer_seeds={alice.id: BOB_OFFER_ALICE_SEED},
+       vault_after={"peer": alice.id, "inUse": BOB_OFFER_ALICE["id"]}),
     pipeline_case("a replayed receipt is a duplicate (deduplicated at step 9, applied once) and is never receipted", [
         (_r1 := receipt_packet(930, NOW - 5, PKT_MID), NOW, X("delivered")),
         (_r1, NOW + 1, X("duplicate")),
@@ -1698,14 +1777,21 @@ pipeline_cases = [
 ]
 pipeline = {
     "rules": (
-        "06 § Receive pipeline. For each case a fresh receiver agents[receiver] whose vault holds only "
-        "packet.deterministic.prekeySeed, whose own card record has contact 'contact' (open or closed), whose seen store has "
+        "06 § Receive pipeline. For each case a fresh receiver agents[receiver] whose vault holds "
+        "packet.deterministic.prekeySeed as its published current prekey and, for an optional 'peerSeeds' {aceId: "
+        "seedHex}, each seed as the peer prekey offered to that aceId (peers[aceId].offered = {seed, offeredAt: the "
+        "vectors' top-level now}; same meaning as packet.open), whose own card record has contact 'contact' (open or closed), whose seen store has "
         "capacity 'capacity', and which has pinned and admitted each 'admitted' PublishedAgent (verified at the vectors' "
         "'now'). Run the steps in order, each at clock 'now': processing 'packet' ends in 'disposition' (delivered, "
         "duplicate, drop or reject) with record code 'code' (null on success), and the receiver sends a receipt whose "
         "outcome is 'receipt', or none (null). Receipts and contact requests are never receipted (a replayed receipt is a "
         "duplicate like any packet); a packet beyond the replay horizon "
-        "is dropped with record code replay_horizon and no receipt."
+        "is dropped with record code replay_horizon and no receipt. Every content carries 'prekey' (the key the sender "
+        "offers the receiver); the receiver strips it before validation. After step 6 opens a packet under the key offered "
+        "to its sender, that key becomes the sender's in-use key (used(from, prekeyId, now)). An optional 'vaultAfter' "
+        "{peer: aceId, inUse: prekeyId} is the receiver vault after the last step: peers[peer].inUse is that key, the key "
+        "offered to peer (if any; a receipt to peer offers a fresh one) is a different one, and open(inUse, sender = "
+        "peer) still succeeds (unknown_prekey for any other sender)."
     ),
     "cases": pipeline_cases,
 }
@@ -1970,8 +2056,8 @@ with open(os.path.join(SPEC, "protocol-contract.json"), encoding="utf-8") as f:
 assert contract["profiles"] == {o["id"]: o["digest"] for o in official}
 
 vectors = {
-    "version": 10,
-    "description": "ACE shared conformance vectors (2026-10-21 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
+    "version": 11,
+    "description": "ACE shared conformance vectors (2026-10-27 revision). Generated by scripts/generate-vectors.py; see each section's rules.",
     "now": NOW,
     "agents": {a.name: {"aceId": a.id, "export": a.export(), **({"supersededSigningSeeds": {"1": b64(bob.extra_signing[1].seed)}} if a is bob else {})}
                for a in AGENTS.values()},

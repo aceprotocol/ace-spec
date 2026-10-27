@@ -699,9 +699,9 @@ open_case("non-zero padding: invalid_body", manual_packet(alice, bob.id, BOB_PRE
           "alice", NOW, "invalid_body")
 open_case("length prefix past the plaintext: invalid_body",
           manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=(4093).to_bytes(4, "big") + PLAINTEXT[4:]), "alice", NOW, "invalid_body")
-open_case("bucket mismatch: 8192 plaintext with prefix 10: invalid_body",
-          manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=(10).to_bytes(4, "big") + b'{"a":"bc"}' + bytes(8178)),
-          "alice", NOW, "invalid_body")
+# valid content whose own bucket is 4096, padded to 8192: only the bucket(n + 4) == len(pt) check rejects it
+open_case("bucket mismatch: 8192 plaintext holding a 4096-bucket content: invalid_body",
+          manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=PLAINTEXT + bytes(4096)), "alice", NOW, "invalid_body")
 open_case("content missing prekey: invalid_body",
           manual_packet(alice, bob.id, BOB_PREKEY, {k: v for k, v in CONTENT.items() if k != "prekey"}, NOW), "alice", NOW, "invalid_body")
 
@@ -717,7 +717,9 @@ packet = {
         "bucket(len(content) + 4), where bucket(n) = the smallest power of two >= max(n, 4096) for n <= 2^20, else "
         "1179652 (MAX_PLAINTEXT_BYTES + 4); BUCKETS = {4096, 8192, ..., 1048576, 1179652}. The receiver unpads: "
         "len(pt) in BUCKETS, n = u32be(pt[0:4]) <= 1179648, 4 + n <= len(pt), bucket(n + 4) == len(pt), pt[4+n:] all zero, "
-        "else invalid_body; the content is pt[4:4+n]. 'content.prekey' is the peer prekey alice offers bob (04 § Peer "
+        "else invalid_body; the content is pt[4:4+n]. The 'length prefix past the plaintext' case is distinguishable only by "
+        "the explicit 4 + n <= len(pt) check (an implementation that slices past the end also fails at content parsing); "
+        "the 'bucket mismatch' case holds valid content, so only the bucket(n + 4) == len(pt) check rejects it. 'content.prekey' is the peer prekey alice offers bob (04 § Peer "
         "prekeys). The receiver vault holds prekeySeed (agents.bob's current prekey). decode: decodePacket on 'packet' (or "
         "on the parse of 'json') fails with 'error' or succeeds (null); the decoded payload length minus 28 (nonce + tag) "
         "must be in BUCKETS (invalid_packet). open: decode -> to must be agents[recipient] (wrong_recipient) -> "
@@ -1739,6 +1741,11 @@ def pipeline_case(name, steps, *, contact="closed", capacity=100_000, pinned=(),
         assert p.offered is None or p.offered.prekey.id != vault_after["inUse"], name
         vault.open(vault_after["inUse"], clock["t"], sender=vault_after["peer"])
         assert outcome(lambda: vault.open(vault_after["inUse"], clock["t"], sender=carol.id)) == "unknown_prekey"
+        if "held" in vault_after:  # the holder rule: the key the peer's packets carried, under bob's pin for it
+            pin = verify_kel(pins[next(n for n, a in AGENTS.items() if a.id == vault_after["peer"])]["kel"], NOW).last_hash
+            got = vault.held(vault_after["peer"], pin, clock["t"])
+            assert got is not None and b64(got.public_key) == vault_after["held"]["publicKey"], name
+            assert vault._state.peers[vault_after["peer"]].held.timestamp == vault_after["held"]["timestamp"], name
         case["vaultAfter"] = vault_after
     return case
 
@@ -1768,7 +1775,8 @@ pipeline_cases = [
         (text_packet(alice, 940, NOW - 10, BOB_OFFER_ALICE), NOW, X("delivered", receipt="delivered")),
         (text_packet(alice, 941, NOW - 5, BOB_OFFER_ALICE), NOW, X("delivered", receipt="delivered")),  # in use: still opens
     ], pinned=[(alice, BASE_PA)], peer_seeds={alice.id: BOB_OFFER_ALICE_SEED},
-       vault_after={"peer": alice.id, "inUse": BOB_OFFER_ALICE["id"]}),
+       vault_after={"peer": alice.id, "inUse": BOB_OFFER_ALICE["id"],
+                    "held": {"publicKey": ALICE_OFFER_BOB["publicKey"], "timestamp": NOW - 5}}),
     pipeline_case("a replayed receipt is a duplicate (deduplicated at step 9, applied once) and is never receipted", [
         (_r1 := receipt_packet(930, NOW - 5, PKT_MID), NOW, X("delivered")),
         (_r1, NOW + 1, X("duplicate")),
@@ -1791,7 +1799,10 @@ pipeline = {
         "to its sender, that key becomes the sender's in-use key (used(from, prekeyId, now)). An optional 'vaultAfter' "
         "{peer: aceId, inUse: prekeyId} is the receiver vault after the last step: peers[peer].inUse is that key, the key "
         "offered to peer (if any; a receipt to peer offers a fresh one) is a different one, and open(inUse, sender = "
-        "peer) still succeeds (unknown_prekey for any other sender)."
+        "peer) still succeeds (unknown_prekey for any other sender). Its optional 'held' {publicKey, timestamp} is the holder "
+        "rule's record for peer: the content prekey of peer's newest packet and that packet's timestamp; held(peer, pin, "
+        "now) returns that key, where pin is the receiver's pin for peer = lastHash of verifyKel(admitted[name of peer].kel, "
+        "the vectors' top-level now) (the digest of the peer's last KEL event)."
     ),
     "cases": pipeline_cases,
 }

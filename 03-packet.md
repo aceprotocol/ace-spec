@@ -1,6 +1,6 @@
 # 03 — Packet
 
-The packet is the only object agents exchange. It is encrypted to the recipient's current prekey ([04](04-descriptor.md#prekey)) and signed by the sender's delegated signing key.
+The packet is the only object agents exchange. It is encrypted to a prekey of the recipient — the published prekey of its descriptor ([04](04-descriptor.md#prekey)) or a peer prekey it offered the sender ([04](04-descriptor.md#peer-prekeys)) — and signed by the sender's delegated signing key.
 
 ```json
 {
@@ -78,14 +78,14 @@ encodePayload(to, messageId, prekeyId, kemCiphertextBytes, payloadBytes)
 
 ## Private content
 
-The plaintext is the canonical JSON ([02](02-encoding.md#canonical-json)) of exactly:
+The content is the canonical JSON ([02](02-encoding.md#canonical-json)) of exactly:
 
 ```json
 { "type": "ace:text:1", "schemaDigest": "<64 hex>", "threadId": "optional", "body": { "message": "hello" }, "admission": "optional", "prekey": "<Base64, 1216 bytes>" }
 ```
 
 - `type` is a namespaced identifier; `schemaDigest` is the **message digest** of that type in an installed manifest ([08](08-profiles.md#digests)); `body` is a JSON object; `threadId`, when present, is a thread ID. A JSON `null` `threadId` is rejected; absence is the only way to omit it. `admission`, when present, is the closed object `{proof, permit, source}` of three JSON objects, the delivery permits and PublishedAgent of an Outbox retry ([05](05-admission.md#admission-recovery)); on a receipt or contact packet (`ace:receipt:1`, `ace:contact:1`) it is `invalid_body`, and the receiver never hands it to the application. `prekey` is required: the canonical Base64 of the 1216-byte X-Wing public key the sender offers `to` for its next application message back ([04](04-descriptor.md#peer-prekeys)); the receiver never hands it to the application. No other members are allowed.
-- The plaintext follows the JSON value rules ([02](02-encoding.md#json-values)) and is at most `MAX_PLAINTEXT_BYTES`. A sender rejects larger content before encrypting.
-- Any parse or shape failure of the decrypted plaintext is `invalid_body`.
+- The content follows the JSON value rules ([02](02-encoding.md#json-values)) and is at most `MAX_PLAINTEXT_BYTES`. A sender rejects larger content before encrypting.
+- Any parse or shape failure of the decrypted content is `invalid_body`.
 
 Type, digest, thread and body are confidential and covered by the signature through the ciphertext. Relays route by `to` only.

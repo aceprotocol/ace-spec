@@ -43,7 +43,7 @@ A cached descriptor is bound to the KEL states it was verified under. A client u
 - Prekey seeds are secrets protected like identity seeds: in a key store readable only by the owner (file mode 0600) or sealed by hardware where available.
 - A superseded prekey whose retention has ended MUST NOT open a packet, even when its seed has not been deleted yet. Implementations delete expired seeds whenever they open a packet or rotate, not only on publication.
 
-SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId)` and `prune(now)`.
+SDK note: see [§ Peer prekeys](#peer-prekeys) for the `PrekeyVault` surface.
 
 The forward-secrecy window of a packet encrypted to a published prekey is the retention period ([06](06-delivery.md#security-considerations)).
 
@@ -64,7 +64,7 @@ Besides its published prekey, an endpoint offers each peer a **peer prekey**: an
 - A packet that verified against the sender's pin and opened ([06](06-delivery.md#receive-pipeline) steps 4 and 6, duplicates at step 9 included) records its `prekey` as the held key for `from` when the packet's `timestamp` is greater than the held key's, bound to the pin state (the digest of the last pinned KEL event) step 4 verified under. A packet whose sender has no pin when it is processed records nothing.
 - The held key is used only while the peer's pin is the one it is bound to and less than `OFFLINE_WINDOW_SECONDS` have passed since the timestamp of the packet that carried it. It is dropped when the peer is blocked and when a receipt `rejected:unknown_prekey` names it.
 
-SDK note: the `PrekeyVault` gains `offer(peer, now)`, `used(peer, prekeyId, now)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open(prekeyId, sender)` covers published and peer seeds.
+SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId, sender)`, `prune(now)`, `offer(peer, now)`, `used(peer, prekeyId, now)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open` covers published and peer seeds.
 
 ## Card record
 

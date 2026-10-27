@@ -621,7 +621,7 @@ dec_case("string timestamp", mutate(P, ["timestamp"], str(NOW)), "invalid_packet
 dec_case("fractional timestamp", mutate(P, ["timestamp"], NOW + 0.5), "invalid_packet")
 dec_case("uppercase prekey id", mutate(P, ["encryption", "prekey"], BOB_PREKEY["id"].upper()), "invalid_packet")
 dec_case("kemCiphertext of 1119 bytes", mutate(P, ["encryption", "kemCiphertext"], b64(KEM[:-1])), "invalid_packet")
-dec_case("non-canonical payload Base64", mutate(P, ["encryption", "payload"], P["encryption"]["payload"].rstrip("=") ), "invalid_packet")
+dec_case("non-canonical payload Base64", mutate(P, ["encryption", "payload"], b64(bytes(29)).rstrip("=")), "invalid_packet")
 dec_case("payload of 27 bytes", mutate(P, ["encryption", "payload"], b64(bytes(27))), "invalid_packet")
 dec_case("signature scheme ml-dsa-44", mutate(P, ["signature", "scheme"], "ml-dsa-44"), "invalid_packet")
 dec_case("signature seq as a string", mutate(P, ["signature", "seq"], "1"), "invalid_packet")

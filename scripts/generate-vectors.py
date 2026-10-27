@@ -50,7 +50,7 @@ from ace.commerce import ThreadStore, commerce_rules, validate_commerce_ext
 from ace.delegation import validate_erc8004
 from ace.identity import sign_claims
 from ace.kel import create_inception, create_rotation, create_signing_delegation, event_bytes
-from ace.packet import aead_key, check_window, pad_plaintext, packet_header, packet_sign_payload
+from ace.packet import aead_key, check_window, packet_header, packet_sign_payload
 from ace.prekeys import _entry, _Peer, _State
 from ace.relay import map_relay_response
 from ace.rules import MessageEvent
@@ -543,9 +543,7 @@ PKT_NONCE = bytes(range(12))
 TEXT_DIGEST = TEXT.messages["ace:text:1"].digest
 CONTENT = {"type": "ace:text:1", "schemaDigest": TEXT_DIGEST, "threadId": "thread-1", "body": {"message": "hello, bob"},
            "prekey": ALICE_OFFER_BOB["publicKey"]}
-CONTENT_BYTES = canonical_state_bytes(CONTENT)
-PLAINTEXT = pad_plaintext(CONTENT_BYTES)  # 03 § Encryption: u32be(len) || content || zeros to the bucket
-assert len(PLAINTEXT) == 4096 and PLAINTEXT == len(CONTENT_BYTES).to_bytes(4, "big") + CONTENT_BYTES + bytes(4092 - len(CONTENT_BYTES))
+PLAINTEXT = canonical_state_bytes(CONTENT)
 KEM = bytes.fromhex(XWING[0]["ciphertext"])
 SS = bytes.fromhex(XWING[0]["sharedSecret"])
 header = packet_header(alice.id, bob.id, PKT_MID, NOW, BOB_PREKEY["id"], KEM)
@@ -553,7 +551,7 @@ AEAD_KEY = HKDF(algorithm=hashes.SHA256(), length=32, salt=SALT, info=header).de
 assert AEAD_KEY == aead_key(SS, header)
 payload = PKT_NONCE + AESGCM(AEAD_KEY).encrypt(PKT_NONCE, PLAINTEXT, header)
 
-det_packet = create_packet(alice.identity, bob.id, BOB_PREKEY, CONTENT_BYTES, timestamp=NOW, message_id=PKT_MID, _kem=(SS, KEM), _nonce=PKT_NONCE)
+det_packet = create_packet(alice.identity, bob.id, BOB_PREKEY, PLAINTEXT, timestamp=NOW, message_id=PKT_MID, _kem=(SS, KEM), _nonce=PKT_NONCE)
 assert det_packet["encryption"] == {"prekey": BOB_PREKEY["id"], "kemCiphertext": b64(KEM), "payload": b64(payload)}
 sign_payload = packet_sign_payload(bob.id, PKT_MID, BOB_PREKEY["id"], KEM, payload)
 packet_message = signing_message(alice.id, NOW, alice.seq, sign_payload)
@@ -625,8 +623,6 @@ dec_case("uppercase prekey id", mutate(P, ["encryption", "prekey"], BOB_PREKEY["
 dec_case("kemCiphertext of 1119 bytes", mutate(P, ["encryption", "kemCiphertext"], b64(KEM[:-1])), "invalid_packet")
 dec_case("non-canonical payload Base64", mutate(P, ["encryption", "payload"], P["encryption"]["payload"].rstrip("=") ), "invalid_packet")
 dec_case("payload of 27 bytes", mutate(P, ["encryption", "payload"], b64(bytes(27))), "invalid_packet")
-dec_case("payload of 4123 bytes: not a bucket", mutate(P, ["encryption", "payload"], b64(bytes(4123))), "invalid_packet")
-dec_case("payload of 4124 bytes: bucket 4096", mutate(P, ["encryption", "payload"], b64(bytes(4124))), None)
 dec_case("signature scheme ml-dsa-44", mutate(P, ["signature", "scheme"], "ml-dsa-44"), "invalid_packet")
 dec_case("signature seq as a string", mutate(P, ["signature", "seq"], "1"), "invalid_packet")
 dec_case("signature of 3308 bytes", mutate(P, ["signature", "value"], b64(bytes(3308))), "invalid_packet")
@@ -650,12 +646,11 @@ def flip_b64(text, index):
     return b64(bytes(raw))
 
 
-def manual_packet(sender: Agent, to, prekey, content, ts, *, seq=None, kem=KEM, ss=SS, mid_=PKT_MID, nonce=PKT_NONCE, padded=None):
-    """``content``: a dict (canonical JSON) or raw content bytes, padded (03 § Encryption); ``padded``: the exact
-    plaintext instead (padding faults). ``kem=None``: a fresh encapsulation to ``prekey``."""
+def manual_packet(sender: Agent, to, prekey, content, ts, *, seq=None, kem=KEM, ss=SS, mid_=PKT_MID, nonce=PKT_NONCE):
+    """``content``: a dict (canonical JSON) or raw plaintext bytes. ``kem=None``: a fresh encapsulation to ``prekey``."""
     if kem is None:
         ss, kem = _xwing.encapsulate(base64.b64decode(prekey["publicKey"]))
-    pt = padded if padded is not None else pad_plaintext(canonical_state_bytes(content) if isinstance(content, dict) else content)
+    pt = canonical_state_bytes(content) if isinstance(content, dict) else content
     hdr = packet_header(sender.id, to, mid_, ts, prekey["id"], kem)
     k = HKDF(algorithm=hashes.SHA256(), length=32, salt=SALT, info=hdr).derive(ss)
     pl = nonce + AESGCM(k).encrypt(nonce, pt, hdr)
@@ -692,16 +687,6 @@ open_case("opened under a peer prekey", manual_packet(alice, bob.id, BOB_OFFER_A
           peer_seeds={alice.id: BOB_OFFER_ALICE_SEED})
 open_case("peer prekey of another peer: unknown_prekey", manual_packet(alice, bob.id, BOB_OFFER_CAROL, CONTENT, NOW, kem=None),
           "alice", NOW, "unknown_prekey", peer_seeds={carol.id: BOB_OFFER_CAROL_SEED})
-# padding (03 § Encryption): the AEAD opens, the padded plaintext is malformed
-_bad_pad = bytearray(PLAINTEXT)
-_bad_pad[-1] = 1
-open_case("non-zero padding: invalid_body", manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=bytes(_bad_pad)),
-          "alice", NOW, "invalid_body")
-open_case("length prefix past the plaintext: invalid_body",
-          manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=(4093).to_bytes(4, "big") + PLAINTEXT[4:]), "alice", NOW, "invalid_body")
-# valid content whose own bucket is 4096, padded to 8192: only the bucket(n + 4) == len(pt) check rejects it
-open_case("bucket mismatch: 8192 plaintext holding a 4096-bucket content: invalid_body",
-          manual_packet(alice, bob.id, BOB_PREKEY, None, NOW, padded=PLAINTEXT + bytes(4096)), "alice", NOW, "invalid_body")
 open_case("content missing prekey: invalid_body",
           manual_packet(alice, bob.id, BOB_PREKEY, {k: v for k, v in CONTENT.items() if k != "prekey"}, NOW), "alice", NOW, "invalid_body")
 
@@ -712,27 +697,20 @@ packet = {
         "payload = nonce || AES-256-GCM(key, nonce, plaintext, aad = header) == payloadHex; createPacket with the injected "
         "(sharedSecret, kemCiphertext, nonce) reproduces packet.encryption exactly; signPayloadHex = encodePayload(to, "
         "messageId, prekeyId, kemCiphertext, payload) and messageHex = M(from, timestamp, seq, signPayload), over which "
-        "packet.signature verifies against agents.alice with ctx 'packet'. Padding (03 § Encryption): contentHex = "
-        "canonical JSON of 'content'; plaintextHex = pad(content) = u32be(len(content)) || content || zero bytes up to "
-        "bucket(len(content) + 4), where bucket(n) = the smallest power of two >= max(n, 4096) for n <= 2^20, else "
-        "1179652 (MAX_PLAINTEXT_BYTES + 4); BUCKETS = {4096, 8192, ..., 1048576, 1179652}. The receiver unpads: "
-        "len(pt) in BUCKETS, n = u32be(pt[0:4]) <= 1179648, 4 + n <= len(pt), bucket(n + 4) == len(pt), pt[4+n:] all zero, "
-        "else invalid_body; the content is pt[4:4+n]. The 'length prefix past the plaintext' case is distinguishable only by "
-        "the explicit 4 + n <= len(pt) check (an implementation that slices past the end also fails at content parsing); "
-        "the 'bucket mismatch' case holds valid content, so only the bucket(n + 4) == len(pt) check rejects it. 'content.prekey' is the peer prekey alice offers bob (04 § Peer "
-        "prekeys). The receiver vault holds prekeySeed (agents.bob's current prekey). decode: decodePacket on 'packet' (or "
-        "on the parse of 'json') fails with 'error' or succeeds (null); the decoded payload length minus 28 (nonce + tag) "
-        "must be in BUCKETS (invalid_packet). open: decode -> to must be agents[recipient] (wrong_recipient) -> "
+        "packet.signature verifies against agents.alice with ctx 'packet'. plaintextHex is the canonical JSON of "
+        "'content'; 'content.prekey' is the peer prekey alice offers bob (04 § Peer prekeys). The receiver vault holds "
+        "prekeySeed (agents.bob's current prekey). decode: decodePacket on 'packet' (or on the parse of 'json') fails with "
+        "'error' or succeeds (null). open: decode -> to must be agents[recipient] (wrong_recipient) -> "
         "operational signature against verifyKel(agents[sender].kel, now), the sender usable at now -> window "
         "now-604800 <= ts <= now+300 -> decrypt with the vault, passing the sender (unknown_prekey, decryption_failed) -> "
-        "unpad (invalid_body) -> private content (invalid_body); 'error' null means it opens. An optional 'peerSeeds' "
+        "private content (invalid_body); 'error' null means it opens. An optional 'peerSeeds' "
         "{aceId: seedHex} means the receiver vault also holds, for each aceId, that seed as the peer prekey it offered "
         "that peer (peers[aceId].offered = {seed, offeredAt: the vectors' top-level now}, inUse and held null): it opens a "
         "packet from that aceId naming its ID (sha256 of its public key), and is unknown_prekey for any other sender."
     ),
     "deterministic": {
         "sender": "alice", "recipient": "bob", "prekeySeed": BOB_PREKEY_SEED, "prekey": BOB_PREKEY, "messageId": PKT_MID,
-        "timestamp": NOW, "content": CONTENT, "contentHex": CONTENT_BYTES.hex(), "plaintextHex": PLAINTEXT.hex(), "sharedSecret": SS.hex(), "kemCiphertext": KEM.hex(),
+        "timestamp": NOW, "content": CONTENT, "plaintextHex": PLAINTEXT.hex(), "sharedSecret": SS.hex(), "kemCiphertext": KEM.hex(),
         "nonce": PKT_NONCE.hex(), "saltHex": SALT.hex(), "headerHex": header.hex(), "keyHex": AEAD_KEY.hex(),
         "payloadHex": payload.hex(), "signPayloadHex": sign_payload.hex(), "messageHex": packet_message.hex(),
         "packet": det_packet,
@@ -801,14 +779,11 @@ pc("missing prekey", cj({k: v for k, v in CONTENT.items() if k != "prekey"}), "i
 pc("prekey of 1215 bytes", cj({**CONTENT, "prekey": b64(base64.b64decode(CONTENT["prekey"])[:-1])}), "invalid_body")
 pc("prekey non-canonical base64", cj({**CONTENT, "prekey": CONTENT["prekey"].rstrip("=")}), "invalid_body")
 pc("prekey null", cj({**CONTENT, "prekey": None}), "invalid_body")
-pc("prekey of 1216 bytes that is not an X-Wing public key", cj({**CONTENT, "prekey": b64(b"\xff" * 1216)}), "invalid_body")
 private_content = {
-    "rules": ("decodePrivateContent(UTF-8 'text' or hex-decoded 'hex'; the content after unpadding) fails with 'error' "
-              "(always invalid_body) or succeeds (null). Content is the closed object {type, schemaDigest, threadId?, body, "
-              "prekey, admission?}: 'prekey' is required on every packet (receipts and contacts too) and is the canonical "
-              "Base64 of a 1216-byte X-Wing public key (04 § Peer prekeys) that decodes as one (03 § X-Wing: its ML-KEM-768 "
-              "encapsulation key passes the FIPS 203 modulus check), so the receiver never holds a key it cannot "
-              "encapsulate to."),
+    "rules": ("decodePrivateContent(UTF-8 'text' or hex-decoded 'hex') fails with 'error' (always invalid_body) or "
+              "succeeds (null). Content is the closed object {type, schemaDigest, threadId?, body, prekey, admission?}: "
+              "'prekey' is required on every packet (receipts and contacts too) and is the canonical Base64 of exactly 1216 "
+              "bytes, an X-Wing public key (04 § Peer prekeys)."),
     "cases": pc_cases,
 }
 

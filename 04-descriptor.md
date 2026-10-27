@@ -106,4 +106,4 @@ The card carries what discovery needs and nothing that names the agent: a displa
 
 ## Extensions
 
-`ext` is an object whose keys are profile IDs listed in `profiles`, whose values are JSON objects, and whose canonical JSON is at most `MAX_EXT_BYTES`. A profile defines its own `ext` value: an official profile's chapter states the schema, which every verifier enforces ([profiles/commerce.md](profiles/commerce.md#descriptor-extension)); a key for an official profile that defines no `ext` is invalid. Values for third-party profiles are opaque objects. No `ext` value confers authority.
+`ext` is an object whose keys are profile IDs listed in `profiles`, whose values are JSON objects, and whose canonical JSON is at most `MAX_EXT_BYTES`. A profile defines its own `ext` value: an official profile's chapter states the schema, which every verifier enforces ([profiles/commerce.md](profiles/commerce.md#descriptor-extension), [profiles/delegation.md](profiles/delegation.md#descriptor-extension)); a key for an official profile that defines no `ext` is invalid. Values for third-party profiles are opaque objects. No `ext` value confers authority.

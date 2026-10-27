@@ -1,4 +1,4 @@
-# Reproducible pre-release bundles
+# Reproducible release bundles
 
 These scripts package and smoke-test the reviewed source combination. They do not publish packages, push Git refs or deploy services. Registry names and version numbers identify the intended distributions; publication is a separate operation.
 

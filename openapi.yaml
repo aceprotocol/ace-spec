@@ -990,8 +990,7 @@ components:
               - agentId
             properties:
               agentRegistry:
-                type: string
-                pattern: "^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$"
+                "$ref": "#/components/schemas/Caip10Account"
               agentId:
                 type: string
                 description: "Chain-native agent ID; when agentRegistry's namespace is eip155, a decimal ERC-721 token ID ^(0|[1-9][0-9]{0,77})$ (04-descriptor.md § Card record)"

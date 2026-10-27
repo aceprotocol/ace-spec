@@ -71,7 +71,7 @@ An endpoint pins, per peer ACE ID, the verified KEL (its `seq`, last hash and st
 - only refreshes `fetchedAt` when it is a prefix of or equal to the pin (`unchanged`);
 - is otherwise `kel_conflict` and changes nothing.
 
-Which descriptor is pinned under a log is decided in [04](04-descriptor.md#caching). Every signed document of a pinned identity (descriptor, permit, delegation credential, contact `source`) is verified under the state that results from reconciling the KEL it carries with the pin: carrying a prefix of the pinned log never reinstates a superseded delegation (`stale_peer_binding`), and a fork is `kel_conflict`. Cache expiry triggers a refresh and never removes a pin. A stored pin is re-verified on load; corrupt state is `storage_failed`. When to pin and refresh is defined by admission ([05](05-admission.md)) and the receive pipeline ([06](06-delivery.md#receive-pipeline)).
+Which descriptor is pinned under a log is decided in [04](04-descriptor.md#caching). Every signed document of a pinned identity (descriptor, permit, contact `source`) is verified under the state that results from reconciling the KEL it carries with the pin: carrying a prefix of the pinned log never reinstates a superseded delegation (`stale_peer_binding`), and a fork is `kel_conflict`. Cache expiry triggers a refresh and never removes a pin. A stored pin is re-verified on load; corrupt state is `storage_failed`. When to pin and refresh is defined by admission ([05](05-admission.md)) and the receive pipeline ([06](06-delivery.md#receive-pipeline)).
 
 ## Rotation and recovery
 

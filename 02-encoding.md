@@ -103,7 +103,6 @@ The complete list. `aceId` and `timestamp` are the inputs of `M`.
 | `kel` | KEL event (`seqOrEmpty` empty) | the identity, event `ts` | `eventBytes` | [01](01-identity.md#key-event-log) |
 | `packet` | Packet | `from`, `timestamp` | `encodePayload(to, messageId, prekeyId, kemCiphertextBytes, payloadBytes)` | [03](03-packet.md#signature) |
 | `agent-descriptor` | Descriptor | `aceId`, `issuedAt` | `canonicalStateBytes(claims)` | [04](04-descriptor.md) |
-| `delegation` | Delegation credential | `issuer`, `issuedAt` | `canonicalStateBytes(claims)` | [04](04-descriptor.md#delegations) |
 | `delivery-permit` | Delivery permit | `issuer`, `issuedAt` | `canonicalStateBytes(claims)` | [05](05-admission.md#delivery-permits) |
 | `card-record` | Card record | `aceId`, `issuedAt` | `canonicalStateBytes(claims)` | [04](04-descriptor.md#card-record) |
 | `register-request` | `POST /v1/register` body | `aceId`, `timestamp` | `encodePayload(lastHashHex, audience)` | [07](07-relay.md#registration) |
@@ -113,6 +112,8 @@ The complete list. `aceId` and `timestamp` are the inputs of `M`.
 | `block` | `POST /v1/blocks` | auth headers | `encodePayload(peer, blocked ? "block" : "unblock", decimal(revision))` | [07](07-relay.md#blocks) |
 | `unregister` | `POST /v1/unregister` | auth headers | empty | [07](07-relay.md#registration) |
 | `wake` | `PUT` / `DELETE /v1/wake` | auth headers | `encodePayload(gateway, token)`; empty for `DELETE` | [07](07-relay.md#wake-hints) |
+
+A profile MAY define signed objects of its own; their action is the profile ID (which contains `:`, so it never equals a core action).
 
 Header-authenticated actions sign `encodePayload(audience, nonce, actionPayload)`, where `actionPayload` is the payload above ([07](07-relay.md#authentication)); they are never signed directly.
 
@@ -135,21 +136,18 @@ Normative values used by every implementation and relay.
 | `MAX_KEL_EVENTS` | 256 | Events per KEL |
 | `MAX_SIGNING_KEY_LIFETIME` | 31622400 | `notAfter - ts` of a `dlg` signing key |
 | `MAX_DESCRIPTOR_LIFETIME` | 604800 | `expiresAt - issuedAt` of a descriptor |
-| `MAX_DELEGATION_LIFETIME` | 604800 | `expiresAt - issuedAt` of a delegation credential |
 | `MAX_PERMIT_LIFETIME` | 2592000 | `expiresAt - issuedAt` of a delivery permit |
 | `PERMIT_RENEWAL_SECONDS` | 1296000 | Remaining permit lifetime below which a receipt carries a renewal |
 | `MAX_RETAINED_PREKEYS` | 16 | Superseded prekey seeds an endpoint retains |
-| `MAX_EXT_BYTES` | 4096 | Canonical JSON of a descriptor `ext` |
+| `MAX_EXT_BYTES` | 32768 | Canonical JSON of a descriptor `ext` |
 | `MAX_PAY_ACCOUNTS` | 8 | Entries of a card record `pay` |
 | `MAX_NOTE_BYTES` | 512 | UTF-8 bytes of a contact `note` |
-| `MAX_INBOX_PAGE` | 100 | Maximum `limit` of inbox and directory pages; default inbox `limit` |
-| `DEFAULT_PAGE_LIMIT` | 20 | Default `limit` of directory pages |
+| `MAX_INBOX_PAGE` | 100 | Maximum and default `limit` of inbox and directory pages |
 | `MAX_PAGE_BYTES` | 8388608 | Serialized inbox or directory page |
 | `MAX_MANIFEST_BYTES` | 65536 | Canonical JSON of a profile manifest |
 | `MAX_PENDING_CONTACT_REQUESTS` | 16 | Held incoming contact requests ([05](05-admission.md#flow)) |
 | `CONTACT_REQUEST_TTL_SECONDS` | 86400 | Lifetime of a held incoming contact request and of a relay's stranger entries |
-| `MAX_STRANGER_KEL_EVENTS` | 32 | Events per KEL in a stranger's contact `source` (its own and each delegation's) |
-| `MAX_STRANGER_DELEGATIONS` | 1 | Delegation entries in a stranger's contact `source` |
+| `MAX_STRANGER_KEL_EVENTS` | 32 | Events of the KEL in a stranger's contact `source` |
 | `STRANGER_ALLOWANCE` | 16 | Queued stranger entries per recipient at a relay ([07](07-relay.md#send)) |
 | `STRANGER_NETWORK_ALLOWANCE` | 2 | Queued stranger entries per client network per recipient at a relay |
 | `CLIENT_NETWORK_PREFIX_IPV4` | 24 | Prefix length of an IPv4 client network ([07](07-relay.md#client-networks)) |

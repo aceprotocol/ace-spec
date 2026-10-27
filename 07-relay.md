@@ -89,7 +89,7 @@ An identity therefore holds at most one handle, and a handle is never reassigned
 
 A relay treats a stored descriptor or card record whose `kel` is not the identity's current registered KEL as absent (`unknown_peer`), also on publish: its `issuedAt` does not bound a new one. Clients check a resolved handle as [04](04-descriptor.md#card-record) states.
 
-`GET /v1/cards` is the public directory: the stored CardBundles of identities whose card record is `listed: true`, has `home` equal to this relay's public URL and whose descriptor is unexpired, ordered by ACE ID. Two optional filters narrow it: `tag`, an exact card tag the record lists, and `profile`, an exact profile ID the stored descriptor lists. The profile filter is a hint: a client obtains the descriptor before connecting ([05](05-admission.md#flow)) and relies on what that descriptor lists. `limit` is 1..`MAX_INBOX_PAGE` (default `DEFAULT_PAGE_LIMIT`); a page is at most `MAX_PAGE_BYTES` and holds at least one entry when any remain; `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`. The directory is a complete, stable listing for crawling; ranking and text search over it are services built on it, not relay functions.
+`GET /v1/cards` is the public directory: the stored CardBundles of identities whose card record is `listed: true`, has `home` equal to this relay's public URL and whose descriptor is unexpired, ordered by ACE ID. Two optional filters narrow it: `tag`, an exact card tag the record lists, and `profile`, an exact profile ID the stored descriptor lists. The profile filter is a hint: a client obtains the descriptor before connecting ([05](05-admission.md#flow)) and relies on what that descriptor lists. `limit` is 1..`MAX_INBOX_PAGE` (default `MAX_INBOX_PAGE`); a page is at most `MAX_PAGE_BYTES` and holds at least one entry when any remain; `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`. The directory is a complete, stable listing for crawling; ranking and text search over it are services built on it, not relay functions.
 
 ## Blocks
 
@@ -158,7 +158,7 @@ Error bodies are `{"error": <code>, "message"?: string}`.
 | `invalid_signature` | 401 | Authentication or KEL signature fails, wrong audience (authentication or registration), or registration `seq` not the delegation |
 | `invalid_authorization` | 401 | Registration signature fails, or a descriptor or card record fails [04](04-descriptor.md#verification) or [04](04-descriptor.md#card-record) |
 | `stale_seq` | 401 | Superseded delegation `seq`, or a registration KEL that is a strict prefix of the stored one |
-| `stale_peer_binding` | 401 | Signed at or after the delegation's `notAfter`, or the signer's KEL is not usable at `now` |
+| `stale_peer_binding` | 401 | Signed before the delegation's `ts` or at or after its `notAfter`, or the signer's KEL is not usable at `now` |
 | `not_registered` | 403 | Caller or publisher not registered here |
 | `not_permitted` | 403 | Missing, invalid or expired permit, unknown or `closed` recipient on send, or blocked sender |
 | `unknown_peer` | 404 | Unknown or expired target, or a handle whose identity has no card record here naming this relay as `home` |

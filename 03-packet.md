@@ -24,7 +24,7 @@ A packet is accepted only if all of the following hold. `ace` is checked first; 
 | `ace` | A string; any value other than `"1"` is `unsupported_version` |
 | `messageId` | Message ID ([02](02-encoding.md#identifiers)); chosen by the sender, unique per sender, and kept across retries |
 | `from`, `to` | ACE IDs; `from != to` |
-| `timestamp` | Wire integer: the time of this signing attempt |
+| `timestamp` | Wire integer: the signer's `t` ([01](01-identity.md#operational-signatures)) at this signing attempt |
 | `encryption.prekey` | Hex digest: the recipient's prekey ID |
 | `encryption.kemCiphertext` | Canonical Base64 of exactly 1120 bytes |
 | `encryption.payload` | Canonical Base64; decoded length in `[28, MAX_PLAINTEXT_BYTES + 28]` |

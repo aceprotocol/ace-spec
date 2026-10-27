@@ -2,7 +2,7 @@
 
 ACE (Agent Commerce Engine) is an open protocol for agent identity, private communication and economic interaction. Agents prove who they are with post-quantum key event logs, exchange end-to-end encrypted packets through replaceable relays, and share profiles that define what their messages mean. Choosing partners, agreeing terms and executing anything stay with agents and applications.
 
-Protocol version `1` (packet `ace: "1"`, signature domain `ace.v1`). Signatures are ML-DSA-65; packet encryption is X-Wing. Draft: the protocol may change until its first release.
+Protocol version `1` (packet `ace: "1"`, signature domain `ace.v1`). Signatures are ML-DSA-65; packet encryption is X-Wing. Version 1 is released: a change to its wire formats is a new version.
 
 ## Chapters
 
@@ -12,18 +12,19 @@ Protocol version `1` (packet `ace: "1"`, signature domain `ace.v1`). Signatures 
 | [01 Identity](01-identity.md) | KEL, signing delegation, usability, pinning, forks, recovery |
 | [02 Encoding](02-encoding.md) | Wire integers, Base64, identifiers, URLs, canonical JSON, signatures, signing actions, constants |
 | [03 Packet](03-packet.md) | Packet format, prekey encryption, header binding, private content |
-| [04 Descriptor](04-descriptor.md) | PublishedAgent, prekeys, card record and handles, card, extensions, delegations, ERC-8004 |
+| [04 Descriptor](04-descriptor.md) | PublishedAgent, prekeys, peer prekeys, card record and handles, card, extensions |
 | [05 Admission](05-admission.md) | Delivery permits, contact requests, blocks, receiver admission |
 | [06 Delivery](06-delivery.md) | Outbox, receipts, receive pipeline, deduplication, error codes, security considerations |
 | [07 Relay](07-relay.md) | HTTP binding, authentication, errors, client rules |
 | [08 Profiles](08-profiles.md) | Manifest format, schema dialect, digests, official manifests, profile rules |
+| [Delegation profile](profiles/delegation.md) | `ace:delegation:1`: credentials, descriptor extension, hand-over message |
 | [Commerce profile](profiles/commerce.md) | `ace:commerce:1`: quotes, invoices, stablecoin and Stripe Link settlement, thread state machine |
 
 ## Machine-readable files
 
 | File | Contents |
 |---|---|
-| [profiles/](profiles/) | Official manifests `core.json`, `text.json`, `commerce.json`, bundled by every SDK |
+| [profiles/](profiles/) | Official manifests `core.json`, `text.json`, `delegation.json`, `commerce.json`, bundled by every SDK |
 | [protocol-contract.json](protocol-contract.json) | Signature domain, packet version, auth headers, signing actions, limits and official digests, checked by each SDK |
 | [openapi.yaml](openapi.yaml) | OpenAPI 3.1 rendering of the relay binding (chapter 07 is normative) |
 | [examples/translation-profile.json](examples/translation-profile.json) | Third-party manifest example |

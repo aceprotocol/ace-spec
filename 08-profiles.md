@@ -45,6 +45,7 @@ The official manifests are the files in [`profiles/`](profiles/). Every SDK bund
 |---|---|---|---|
 | [core.json](profiles/core.json) | `ace:core:1` | `66f46d4b8951b75f98abae24a72ceffa173c4e27748d09be78b8d6382ddc8222` | never; always installed |
 | [text.json](profiles/text.json) | `ace:text:1` | `48619350eaea46b2d60f7ce71fe55867e00c8dd081796b408fb6a95692b8b307` | when enabled |
+| [delegation.json](profiles/delegation.json) | `ace:delegation:1` | `TBD-BY-TASK-2` | when enabled |
 | [commerce.json](profiles/commerce.json) | `ace:commerce:1` | `30583f0a1acd86ac5a217d706df1c27dc7caea5d4f2deed6112807679afab053` | when enabled |
 
 | Message type | Message digest | Rules |
@@ -52,6 +53,7 @@ The official manifests are the files in [`profiles/`](profiles/). Every SDK bund
 | `ace:receipt:1` | `a79fea8c61d30c484fdc9ba71fee310c612da84f84827fe2c4b2e99e5708d3e3` | [06](06-delivery.md#receipts) |
 | `ace:contact:1` | `29fc76bbaa5a437aa068f823b1f2b2466c89fed6b2ea4b9cfa7c31cc80df15e9` | [05](05-admission.md#contact-requests) |
 | `ace:text:1` | `e91541145d670369cf651d062e6bb8a94ce2605d4a9f2261ceef1d8a29c2e7da` | none: `{message}` plain text |
+| `ace:delegation:1` | `TBD-BY-TASK-2` | [delegation](profiles/delegation.md) |
 | `ace:commerce:rfq:1` | `7b3fc71d8e538ff2f5ca0189d81feb237aa31e1f49787e951b90e9e17c1207d5` | [commerce](profiles/commerce.md) |
 | `ace:commerce:offer:1` | `0fb206d333aa41734407402ce4e44157720c39a9ffc4325750ebfb8d0c7f8179` | [commerce](profiles/commerce.md) |
 | `ace:commerce:accept:1` | `59e5e6fd0df886bab94d439f138cbaf1990c3af7cfe44484581c501d37e76c23` | [commerce](profiles/commerce.md) |

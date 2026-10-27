@@ -56,11 +56,11 @@ Every signature outside the KEL is a delegated signature ([02](02-encoding.md#de
 
 1. requires `signature.scheme` to be `ml-dsa-65`;
 2. requires `signature.seq` to equal the `seq` of the current signing delegation (`stale_peer_binding` otherwise; [06](06-delivery.md#receive-pipeline) defines when a receiver refreshes first), and never uses `seq` to select a key outside that log;
-3. requires **signed while live**: the object's signed timestamp is before the delegation's `notAfter`, if any (`stale_peer_binding`);
+3. requires **signed while live**: the object's signed timestamp is at or after the `ts` of the delegating `dlg` and, if `notAfter` is set, before it (`stale_peer_binding`);
 4. then verifies the signature (the surface's signature code);
 5. requires the signer's KEL, after reconciliation with the pin, to be usable at `now` (`stale_peer_binding`).
 
-Before signing, a signer checks its own identity at `t = max(now, ts of the last event)`: the log verifies, the identity is usable, and the key and `seq` are the current delegation. Any failure is the local error `identity_unavailable` and nothing is signed.
+Before signing, a signer checks its own identity at `t = max(now, ts of its last event)`: the log verifies, the identity is usable at `t`, and the key and `seq` are the current delegation. Any failure is the local error `identity_unavailable` and nothing is signed. `t` is the signed timestamp (a descriptor or card record also applies the `+1` rule of [04](04-descriptor.md#verification)).
 
 ## Pinning
 
@@ -71,7 +71,7 @@ An endpoint pins, per peer ACE ID, the verified KEL (its `seq`, last hash and st
 - only refreshes `fetchedAt` when it is a prefix of or equal to the pin (`unchanged`);
 - is otherwise `kel_conflict` and changes nothing.
 
-Which descriptor is pinned under a log is decided in [04](04-descriptor.md#caching). Every signed document of a pinned identity (descriptor, permit, delegation credential, contact `source`) is verified under the state that results from reconciling the KEL it carries with the pin, including the issuer of a delegation entry embedded in another identity's descriptor ([04](04-descriptor.md#delegations)): carrying a prefix of the pinned log never reinstates a superseded delegation (`stale_peer_binding`), and a fork is `kel_conflict`. Cache expiry triggers a refresh and never removes a pin. A stored pin is re-verified on load; corrupt state is `storage_failed`. When to pin and refresh is defined by admission ([05](05-admission.md)) and the receive pipeline ([06](06-delivery.md#receive-pipeline)).
+Which descriptor is pinned under a log is decided in [04](04-descriptor.md#caching). Every signed document of a pinned identity (descriptor, permit, delegation credential, contact `source`) is verified under the state that results from reconciling the KEL it carries with the pin: carrying a prefix of the pinned log never reinstates a superseded delegation (`stale_peer_binding`), and a fork is `kel_conflict`. Cache expiry triggers a refresh and never removes a pin. A stored pin is re-verified on load; corrupt state is `storage_failed`. When to pin and refresh is defined by admission ([05](05-admission.md)) and the receive pipeline ([06](06-delivery.md#receive-pipeline)).
 
 ## Rotation and recovery
 

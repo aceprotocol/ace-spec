@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 SPEC = Path(__file__).resolve().parents[1]
-MANIFESTS = ["core", "text", "commerce"]
+MANIFESTS = ["core", "text", "commerce", "delegation"]
 SPEC_MANIFESTS = {m: (SPEC / "profiles" / f"{m}.json").read_bytes() for m in MANIFESTS}
 
 ap = argparse.ArgumentParser()
@@ -113,15 +113,15 @@ SWIFT_NAMES = {
     "MAX_PLAINTEXT_BYTES": "maxPlaintextBytes", "MAX_PACKET_BYTES": "maxPacketBytes",
     "MAX_PUBLISHED_AGENT_BYTES": "maxPublishedAgentBytes", "MAX_JSON_DEPTH": "maxJSONDepth", "MAX_TYPE_BYTES": "maxTypeBytes",
     "MAX_THREAD_ID_LENGTH": "maxThreadIdLength", "MAX_KEL_EVENTS": "maxKelEvents", "MAX_SIGNING_KEY_LIFETIME": "maxSigningKeyLifetime",
-    "MAX_DESCRIPTOR_LIFETIME": "maxDescriptorSeconds", "MAX_DELEGATION_LIFETIME": "maxCredentialSeconds",
+    "MAX_DESCRIPTOR_LIFETIME": "maxDescriptorSeconds",
     "MAX_PERMIT_LIFETIME": "maxPermitSeconds", "PERMIT_RENEWAL_SECONDS": "permitRenewalSeconds",
     "MAX_RETAINED_PREKEYS": "maxPrekeys", "MAX_EXT_BYTES": "maxExtBytes", "MAX_NOTE_BYTES": "maxNoteBytes",
     "MAX_INBOX_PAGE": "maxInboxPage", "MAX_PAGE_BYTES": "maxPageBytes", "MAX_MANIFEST_BYTES": "maxManifestBytes",
-    "MAX_SEND_BODY_BYTES": "maxSendBodyBytes", "DEFAULT_PAGE_LIMIT": "defaultPageLimit", "MIN_BLOCK_CAP": "minBlockCap",
+    "MAX_SEND_BODY_BYTES": "maxSendBodyBytes", "MIN_BLOCK_CAP": "minBlockCap",
     "STRANGER_ALLOWANCE": "strangerAllowance", "STRANGER_NETWORK_ALLOWANCE": "strangerNetworkAllowance",
     "PIN_REFRESH_INTERVAL_SECONDS": "pinRefreshIntervalSeconds", "MAX_FETCH_ATTEMPTS": "maxFetchAttempts",
     "MAX_PENDING_CONTACT_REQUESTS": "maxPendingContactRequests", "CONTACT_REQUEST_TTL_SECONDS": "contactRequestTTLSeconds",
-    "MAX_STRANGER_KEL_EVENTS": "maxStrangerKelEvents", "MAX_STRANGER_DELEGATIONS": "maxStrangerDelegations",
+    "MAX_STRANGER_KEL_EVENTS": "maxStrangerKelEvents",
     "MAX_CARD_RECORD_BYTES": "maxCardRecordBytes", "MAX_PAY_ACCOUNTS": "maxPayAccounts",
 }
 

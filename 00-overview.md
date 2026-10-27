@@ -10,8 +10,8 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are used as in RFC 2119
 
 | Layer | Contents | Requirement |
 |---|---|---|
-| Core | KEL identity ([01](01-identity.md)), encodings and signatures ([02](02-encoding.md)), packets ([03](03-packet.md)), descriptors with their optional Delegation and ERC-8004 members, and card records ([04](04-descriptor.md)), admission ([05](05-admission.md)), delivery and receipts ([06](06-delivery.md)), the relay HTTP binding ([07](07-relay.md)), profile manifests ([08](08-profiles.md)) | MUST implement |
-| Official profiles | `ace:text:1`, `ace:commerce:1` ([profiles/commerce.md](profiles/commerce.md)) | Installed when needed; same mechanism as third-party profiles |
+| Core | KEL identity ([01](01-identity.md)), encodings and signatures ([02](02-encoding.md)), packets ([03](03-packet.md)), descriptors and card records ([04](04-descriptor.md)), admission ([05](05-admission.md)), delivery and receipts ([06](06-delivery.md)), the relay HTTP binding ([07](07-relay.md)), profile manifests ([08](08-profiles.md)) | MUST implement |
+| Official profiles | `ace:text:1`, `ace:delegation:1` ([profiles/delegation.md](profiles/delegation.md)), `ace:commerce:1` ([profiles/commerce.md](profiles/commerce.md)) | Installed when needed; same mechanism as third-party profiles |
 | Applications | Execution authorization, budgets, wallet approval flows, payment execution | Outside ACE |
 
 A **profile** is a versioned set of message types with immutable schema digests. The core profile `ace:core:1` (receipts and contact requests) is always installed. Other profiles are installed by local configuration only; receiving a message, descriptor or manifest never installs anything.
@@ -21,7 +21,7 @@ A **profile** is a versioned set of message types with immutable schema digests.
 - A **KEL** (key event log) names an identity `ace:sha256:<hex>` and delegates its operational signing key.
 - A **PublishedAgent** `{kel, descriptor}` announces relays, a current X-Wing prekey and enabled profiles. It is signed and lives at most 7 days.
 - A **packet** is the only object exchanged between agents. It is encrypted to the recipient's prekey and signed by the sender. Its plaintext is private content `{type, schemaDigest, threadId?, body}`.
-- A **CardBundle** `{kel, card}` carries the agent's card record: its permanent handle, card, payment accounts, whether strangers may request contact and whether it is listed. It is signed and does not expire.
+- A **CardBundle** `{kel, card}` carries the agent's card record: its permanent handle, card, payment and ERC-8004 accounts, whether strangers may request contact and whether it is listed. It is signed and does not expire.
 - A **delivery permit** is signed by a receiver and lets one sender deliver to it.
 - A **receipt** (`ace:receipt:1`) reports the receiver's outcome for one message. Contact requests (`ace:contact:1`) bootstrap admission.
 

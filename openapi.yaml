@@ -247,7 +247,7 @@ paths:
             type: integer
             minimum: 1
             maximum: 100
-            default: 20
+            default: 100
       responses:
         "200":
           description: Success
@@ -977,6 +977,25 @@ components:
           uniqueItems: true
           items:
             "$ref": "#/components/schemas/Caip10Account"
+        erc8004:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - agentRegistry
+              - agentId
+            properties:
+              agentRegistry:
+                type: string
+                pattern: "^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$"
+              agentId:
+                type: string
+                description: "Chain-native agent ID; when agentRegistry's namespace is eip155, a decimal ERC-721 token ID ^(0|[1-9][0-9]{0,77})$ (04-descriptor.md § Card record)"
+                pattern: "^[A-Za-z0-9]{1,128}$"
         contact:
           type: string
           enum:
@@ -1015,27 +1034,6 @@ components:
           items:
             type: string
             pattern: "^[a-z0-9-]{1,32}$"
-    DelegationCredential:
-      type: object
-      additionalProperties: false
-      description: "Action delegation; lifetime at most 604800 seconds"
-      required:
-        - issuer
-        - subject
-        - issuedAt
-        - expiresAt
-        - signature
-      properties:
-        issuer:
-          "$ref": "#/components/schemas/AceId"
-        subject:
-          "$ref": "#/components/schemas/AceId"
-        issuedAt:
-          "$ref": "#/components/schemas/WireInt"
-        expiresAt:
-          "$ref": "#/components/schemas/WireInt"
-        signature:
-          "$ref": "#/components/schemas/Signature"
     Descriptor:
       type: object
       additionalProperties: false
@@ -1095,41 +1093,7 @@ components:
           type: object
           additionalProperties:
             type: object
-          description: "Keys are listed profile IDs; canonical JSON at most 4096 bytes"
-        delegations:
-          type: array
-          minItems: 1
-          maxItems: 4
-          items:
-            type: object
-            additionalProperties: false
-            required:
-              - kel
-              - credential
-            properties:
-              kel:
-                "$ref": "#/components/schemas/Kel"
-              credential:
-                "$ref": "#/components/schemas/DelegationCredential"
-        erc8004:
-          type: array
-          minItems: 1
-          maxItems: 4
-          uniqueItems: true
-          items:
-            type: object
-            additionalProperties: false
-            required:
-              - agentRegistry
-              - agentId
-            properties:
-              agentRegistry:
-                type: string
-                pattern: "^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$"
-              agentId:
-                type: string
-                description: "Chain-native agent ID; when agentRegistry's namespace is eip155, a decimal ERC-721 token ID ^(0|[1-9][0-9]{0,77})$ (04-descriptor.md)"
-                pattern: "^[A-Za-z0-9]{1,128}$"
+          description: "Keys are listed profile IDs; canonical JSON at most 32768 bytes"
         signature:
           "$ref": "#/components/schemas/Signature"
     PublishedAgent:

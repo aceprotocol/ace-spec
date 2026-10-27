@@ -2012,14 +2012,22 @@ REG_MESSAGE = signing_message(bob.id, NOW, bob.seq, encode_payload(bob.state.las
 assert relay_verify_registration(reg, RELAY, NOW) == hashlib.sha256(REG_MESSAGE).hexdigest()
 _reg_retarget = {**reg, "audience": OTHER_RELAY}
 _reg_seq = {**reg, "signature": {**reg["signature"], "seq": 1}}
+# signed one second before bob's current dlg (T0 + 10): create_registration_request signs at the log tail, so this
+# one is made by hand
+_reg_early_m = signing_message(bob.id, BOB_DLG_TS - 1, bob.seq, encode_payload(bob.state.last_hash, RELAY))
+_reg_early = {**reg, "timestamp": BOB_DLG_TS - 1,
+              "signature": {**reg["signature"], "value": b64(bob.signing.sign(_reg_early_m, "register-request"))}}
 REG_NEGATIVE = [
     ("verified by another relay", reg, OTHER_RELAY, NOW, "invalid_signature"),
     ("audience changed after signing", _reg_retarget, OTHER_RELAY, NOW, "invalid_authorization"),
     ("timestamp older than 300 s", reg, RELAY, NOW + 301, "stale_timestamp"),
     ("signature seq of a superseded delegation", _reg_seq, RELAY, NOW, "invalid_signature"),
+    ("timestamp before the dlg ts: stale_peer_binding", _reg_early, RELAY, BOB_DLG_TS + 100, "stale_peer_binding"),
 ]
 for name, rq, aud, now_, code in REG_NEGATIVE:
     expect(f"registration {name}", lambda: relay_verify_registration(rq, aud, now_), code)
+# a signer never produces it: its timestamp is max(now, ts of its last event)
+assert create_registration_request(bob.identity, BOB_DLG_TS - 1, audience=RELAY)["timestamp"] == BOB_DLG_TS
 WAKE_TOKEN = re.compile(r"[A-Za-z0-9_-]{22,512}")
 
 

@@ -53,7 +53,7 @@ Besides its published prekey, an endpoint offers each peer a **peer prekey**: an
 
 **Issuer.** Per peer, the issuer keeps at most two seeds: the *offered* key and the *in-use* key.
 
-- The first packet to a peer generates its offered key; every later packet to that peer carries the same offered key until it is used.
+- The first packet to a peer generates its offered key; every later packet to that peer carries the same offered key until it is used or deleted.
 - When a packet from the peer opens under the offered key, the issuer, before acknowledging that packet at its relay: deletes the in-use seed, makes the offered key the in-use key, and generates a new offered key for its next packet. A packet opening under the in-use key changes nothing.
 - A seed, offered or in use, is deleted `OFFLINE_WINDOW_SECONDS` after the timestamp of the last packet that carried it as the offered key.
 - A peer prekey opens only packets whose `from` is the peer it was offered to; any other packet referencing it is `unknown_prekey`.
@@ -61,7 +61,7 @@ Besides its published prekey, an endpoint offers each peer a **peer prekey**: an
 
 **Holder.** The holder keeps at most one key per peer.
 
-- A packet that verified against the sender's pin and opened ([06](06-delivery.md#receive-pipeline) steps 4 and 6, duplicates at step 9 included) records its `prekey` as the held key for `from` when the packet's `timestamp` is greater than the held key's, bound to the pin state (the digest of the last pinned KEL event) step 4 verified under. A packet whose sender has no pin when it is processed records nothing.
+- A packet that opened (step 6) and whose sender is pinned, at step 3 or by the recovery path ([05](05-admission.md#admission-recovery)), records its `prekey` as the held key for `from` when the packet's `timestamp` is greater than the held key's, bound to the pin state (the digest of the last pinned KEL event) it was authenticated under; duplicates at step 9 record too. A contact packet, and any packet whose sender has no pin when it is processed, records nothing.
 - The held key is used only while the peer's pin is the one it is bound to and less than `OFFLINE_WINDOW_SECONDS` have passed since the timestamp of the packet that carried it. It is dropped when the peer is blocked and when a receipt `rejected:unknown_prekey` names it.
 
 SDK note: SDKs expose prekey storage as a `PrekeyVault` with `current()`, `rotate(now)`, `open(prekeyId, sender)`, `prune(now)`, `offer(peer, now)`, `used(peer, prekeyId, now)`, `hold(peer, prekey, timestamp, pin)`, `held(peer, pin, now)` and `dropHeld(peer)`; `open` covers published and peer seeds.

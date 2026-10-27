@@ -45,7 +45,7 @@ key       = HKDF-SHA256(ikm = ss, salt = "" (empty), info = header, L = 32)
 payload   = nonce[12] ‖ AES-256-GCM(key, nonce, plaintext, aad = header)      // ciphertext ‖ tag[16]
 ```
 
-`bucket(n)` is the smallest power of two that is at least `n` and at least `MIN_PLAINTEXT_BUCKET`, except that when `n` exceeds 2^20 it is `MAX_PLAINTEXT_BYTES + 4`. The plaintext buckets are therefore 2^12 … 2^20 and `MAX_PLAINTEXT_BYTES + 4`. Padding hides the length of the content from the relay: a receipt and a short message are the same size on the wire.
+`bucket(n)` is the smallest power of two that is at least `n` and at least `MIN_PLAINTEXT_BUCKET`, except that when `n` exceeds 2^20 it is `MAX_PLAINTEXT_BYTES + 4`. The plaintext buckets are therefore 2^12 … 2^20 and `MAX_PLAINTEXT_BYTES + 4`. Padding hides the length of the content from the relay: a receipt without a permit renewal and a short message are the same size on the wire.
 
 The nonce is 12 random bytes. Every packet encapsulates a fresh secret, so every key is independent. `ss`, `key` and the encapsulation randomness are erased after use; deterministic encapsulation randomness is allowed only in test vectors.
 

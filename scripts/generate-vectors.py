@@ -801,11 +801,14 @@ pc("missing prekey", cj({k: v for k, v in CONTENT.items() if k != "prekey"}), "i
 pc("prekey of 1215 bytes", cj({**CONTENT, "prekey": b64(base64.b64decode(CONTENT["prekey"])[:-1])}), "invalid_body")
 pc("prekey non-canonical base64", cj({**CONTENT, "prekey": CONTENT["prekey"].rstrip("=")}), "invalid_body")
 pc("prekey null", cj({**CONTENT, "prekey": None}), "invalid_body")
+pc("prekey of 1216 bytes that is not an X-Wing public key", cj({**CONTENT, "prekey": b64(b"\xff" * 1216)}), "invalid_body")
 private_content = {
     "rules": ("decodePrivateContent(UTF-8 'text' or hex-decoded 'hex'; the content after unpadding) fails with 'error' "
               "(always invalid_body) or succeeds (null). Content is the closed object {type, schemaDigest, threadId?, body, "
               "prekey, admission?}: 'prekey' is required on every packet (receipts and contacts too) and is the canonical "
-              "Base64 of a 1216-byte X-Wing public key (04 § Peer prekeys)."),
+              "Base64 of a 1216-byte X-Wing public key (04 § Peer prekeys) that decodes as one (03 § X-Wing: its ML-KEM-768 "
+              "encapsulation key passes the FIPS 203 modulus check), so the receiver never holds a key it cannot "
+              "encapsulate to."),
     "cases": pc_cases,
 }
 

@@ -1,0 +1,29 @@
+{
+  "id": "urn:example:translation:1",
+  "messages": [
+    {
+      "type": "urn:example:translate:1",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "language"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      # The generator asserts every expectation against the Python SDK while it writes the vectors.
+      - run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "ace-sdk @ git+https://github.com/aceprotocol/ace-sdk-py@main"
+      - run: '"$RUNNER_TEMP/venv/bin/python" scripts/generate-vectors.py --out "$RUNNER_TEMP/test-vectors.json"'

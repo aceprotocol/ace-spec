@@ -1,0 +1,1150 @@
+openapi: "3.1.0"
+info:
+  title: ACE Relay API
+  version: "1"
+  description: "Rendering of 07-relay.md (normative): packet 1. x-ace-action names the ML-DSA signing context; for header-authenticated operations all six X-ACE headers are required."
+servers:
+  - url: "https://relay.aceprotocol.org"
+paths:
+  "/v1/register":
+    post:
+      summary: "Register or update the caller's KEL"
+      description: "07 § Registration. Checked against the stored KEL; after an unregistered identity's KEL was deleted, against its fixed-size horizon (the candidate must contain the epoch start and extend the retired KEL or recover with a rot; timestamp above the barrier). KEL bytes are charged to the registering network's byte budget (429 rate_limited)."
+      x-ace-action: register-request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/RegistrationRequest"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - ok
+                  - status
+                properties:
+                  ok:
+                    const: true
+                  status:
+                    type: string
+                    enum:
+                      - registered
+                      - idempotent
+                      - refreshed
+                      - rotated
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/unregister":
+    post:
+      summary: "Retire the caller's registration"
+      x-ace-action: unregister
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/descriptor":
+    post:
+      summary: "Publish the caller's PublishedAgent"
+      description: "Authenticated by the descriptor signature; kel must equal the registered KEL and relays must include this relay's public URL (400 invalid_argument)."
+      x-ace-action: agent-descriptor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/PublishedAgent"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/descriptor/{aceId}":
+    get:
+      summary: Look up a descriptor
+      description: "The unexpired PublishedAgent of any registered identity, stored under its current registered KEL; unknown_peer otherwise."
+      parameters:
+        - name: aceId
+          in: path
+          required: true
+          schema:
+            "$ref": "#/components/schemas/AceId"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/PublishedAgent"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/card":
+    post:
+      summary: "Publish the caller's card record"
+      description: "04 § Card record, 07 § Descriptors and cards. Authenticated by the card record signature; kel must equal the registered KEL. 409 stale_descriptor for an older issuedAt, or an equal one with different claims; 400 invalid_argument for a record that changes or drops the handle bound here; 409 handle_taken for a handle bound to another identity or reserved; 429 rate_limited for too many handle claims."
+      x-ace-action: card-record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/CardBundle"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/card/{aceId}":
+    get:
+      summary: Look up a card record
+      description: "The stored CardBundle of a registered identity; unknown_peer otherwise."
+      parameters:
+        - name: aceId
+          in: path
+          required: true
+          schema:
+            "$ref": "#/components/schemas/AceId"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CardBundle"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/handles/{handle}":
+    get:
+      summary: Look up a handle
+      description: "07 § Descriptors and cards. The CardBundle of the identity the handle is bound to, when that record's home is this relay; otherwise unknown_peer. Clients check and pin the result as 04 § Card record states."
+      parameters:
+        - name: handle
+          in: path
+          required: true
+          schema:
+            "$ref": "#/components/schemas/Handle"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/CardBundle"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/cards":
+    get:
+      summary: Public directory
+      description: "07 § Descriptors and cards. Stored CardBundles of identities whose card record is listed: true and names this relay as home, and whose descriptor is unexpired, ordered by ACE ID (a record under a superseded KEL is absent). tag: an exact tag the card lists; profile: an exact profile ID the stored descriptor lists (a hint). A page is at most MAX_PAGE_BYTES."
+      parameters:
+        - name: tag
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[a-z0-9-]{1,32}$"
+        - name: profile
+          in: query
+          required: false
+          schema:
+            "$ref": "#/components/schemas/ProfileId"
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 512
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - cards
+                  - cursor
+                properties:
+                  cards:
+                    type: array
+                    items:
+                      "$ref": "#/components/schemas/CardBundle"
+                  cursor:
+                    type:
+                      - string
+                      - "null"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/blocks":
+    post:
+      summary: Block or unblock a peer
+      x-ace-action: block
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - peer
+                - blocked
+                - revision
+              properties:
+                peer:
+                  "$ref": "#/components/schemas/AceId"
+                blocked:
+                  type: boolean
+                revision:
+                  "$ref": "#/components/schemas/WireInt"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/send":
+    post:
+      summary: Queue a packet for a registered recipient
+      description: "Body at most 2162688 bytes. An unregistered or blocking recipient is refused before the duplicate check and any permit or stranger check. With a permit: issuer = to, subject = from, verified against the recipient's KEL at now. Without: the recipient must have a stored card record with contact open and an unexpired descriptor (stranger allowance: 16 entries per recipient, 2 per client network). The relay does not verify the packet signature. Every refusal of the recipient (unknown, closed, blocking, bad permit) is 403 not_permitted with one message; byte and rate budgets are 429 rate_limited (or recipient_inbox_full) with Retry-After."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - packet
+              properties:
+                packet:
+                  "$ref": "#/components/schemas/Packet"
+                permit:
+                  "$ref": "#/components/schemas/Permit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/inbox":
+    get:
+      summary: Read queued packets without deleting
+      x-ace-action: inbox
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+        - "$ref": "#/components/parameters/Since"
+        - "$ref": "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - messages
+                  - cursor
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      "$ref": "#/components/schemas/InboxEntry"
+                  cursor:
+                    oneOf:
+                      - "$ref": "#/components/schemas/StreamId"
+                      - type: "null"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/inbox/ack":
+    post:
+      summary: Delete queued packets through a stream ID
+      x-ace-action: inbox-ack
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+        - name: through
+          in: query
+          required: true
+          schema:
+            "$ref": "#/components/schemas/StreamId"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/listen":
+    get:
+      summary: Server-Sent Events stream of queued packets
+      x-ace-action: listen
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+        - "$ref": "#/components/parameters/Since"
+      responses:
+        "200":
+          description: Success
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "Events connected, catchup, message, drain; data is {\"packet\": Packet}"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/v1/wake":
+    put:
+      summary: Register or replace the caller's wake gateway and token (optional; 404 not_found when not offered)
+      x-ace-action: wake
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/WakeRegistration"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+    delete:
+      summary: Remove the caller's wake registration (optional; 404 not_found when not offered)
+      x-ace-action: wake
+      parameters:
+        - "$ref": "#/components/parameters/XAceId"
+        - "$ref": "#/components/parameters/XAceTimestamp"
+        - "$ref": "#/components/parameters/XAceSeq"
+        - "$ref": "#/components/parameters/XAceAudience"
+        - "$ref": "#/components/parameters/XAceNonce"
+        - "$ref": "#/components/parameters/XAceSignature"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Ok"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/health":
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+  "/metrics":
+    get:
+      summary: Operator metrics
+      responses:
+        "200":
+          description: Success
+          content:
+            text/plain:
+              schema:
+                type: string
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
+components:
+  parameters:
+    XAceId:
+      name: X-ACE-Id
+      in: header
+      required: true
+      schema:
+        "$ref": "#/components/schemas/AceId"
+    XAceTimestamp:
+      name: X-ACE-Timestamp
+      in: header
+      required: true
+      description: "Unix seconds, at most 2^53-1"
+      schema:
+        "$ref": "#/components/schemas/WireIntString"
+    XAceSeq:
+      name: X-ACE-Seq
+      in: header
+      required: true
+      description: Signing delegation seq
+      schema:
+        "$ref": "#/components/schemas/WireIntString"
+    XAceAudience:
+      name: X-ACE-Audience
+      in: header
+      required: true
+      description: "The relay's configured canonical public URL"
+      schema:
+        type: string
+        maxLength: 2048
+    XAceNonce:
+      name: X-ACE-Nonce
+      in: header
+      required: true
+      description: "32 random bytes, fresh per attempt"
+      schema:
+        "$ref": "#/components/schemas/Hex64"
+    XAceSignature:
+      name: X-ACE-Signature
+      in: header
+      required: true
+      description: "Delegated ML-DSA-65 signature over encodePayload(\"ace.v1\", aceId, decimal(timestamp), decimal(seq), encodePayload(audience, nonce, actionPayload)), ctx = action"
+      schema:
+        type: string
+        minLength: 4412
+        maxLength: 4412
+    Since:
+      name: since
+      in: query
+      required: false
+      description: "Stream ID, or - (default)"
+      schema:
+        type: string
+        pattern: "^(-|[0-9]{1,20}-[0-9]{1,20})$"
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 100
+  schemas:
+    Ok:
+      type: object
+      required:
+        - ok
+      properties:
+        ok:
+          const: true
+    WireInt:
+      type: integer
+      minimum: 0
+      maximum: 9007199254740991
+    AceId:
+      type: string
+      pattern: "^ace:sha256:[0-9a-f]{64}$"
+    Hex64:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    Uuid4:
+      type: string
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    StreamId:
+      type: string
+      pattern: "^[0-9]{1,20}-[0-9]{1,20}$"
+    WireIntString:
+      description: "A WireInt in decimal text (header form)"
+      type: string
+      pattern: "^(0|[1-9][0-9]{0,15})$"
+    Handle:
+      type: string
+      minLength: 3
+      maxLength: 32
+      pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    RootScheme:
+      description: "Signing scheme of a KEL root (and of the KEL event signatures it makes)"
+      type: string
+      const: ml-dsa-65
+    ProfileId:
+      type: string
+      maxLength: 256
+      pattern: "^[a-z][a-z0-9+.-]*:[A-Za-z0-9._~:/?#\\[\\]@!$&'()*+,;=%-]+$"
+    HttpsUrl:
+      type: string
+      maxLength: 2048
+      description: "ACE HTTPS URL grammar (02-encoding.md); host at most 253 characters, port 1..65535"
+      pattern: "^https://[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*(?::[0-9]{1,5})?(?:[/?#][A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]*)?$"
+    RelayUrl:
+      type: string
+      maxLength: 2048
+      description: "Canonical relay URL (02-encoding.md § Relay URLs)"
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          enum:
+            - invalid_argument
+            - invalid_packet
+            - unsupported_version
+            - invalid_registration
+            - invalid_kel
+            - stale_timestamp
+            - invalid_signature
+            - invalid_authorization
+            - stale_seq
+            - stale_peer_binding
+            - not_registered
+            - not_permitted
+            - unknown_peer
+            - replay
+            - identity_conflict
+            - future_seq
+            - kel_conflict
+            - stale_descriptor
+            - handle_taken
+            - stale_revision
+            - limit_exceeded
+            - payload_too_large
+            - rate_limited
+            - recipient_inbox_full
+            - not_found
+            - internal_error
+        message:
+          type: string
+    KelSignature:
+      type: object
+      additionalProperties: false
+      description: "KEL event signature: no seq; scheme equals the signing root's"
+      required:
+        - scheme
+        - value
+      properties:
+        scheme:
+          "$ref": "#/components/schemas/RootScheme"
+        value:
+          type: string
+          minLength: 4412
+          maxLength: 4412
+          description: Canonical Base64 of 3309 bytes
+    RootKey:
+      type: object
+      additionalProperties: false
+      required:
+        - scheme
+        - publicKey
+      properties:
+        scheme:
+          "$ref": "#/components/schemas/RootScheme"
+        publicKey:
+          type: string
+          minLength: 2604
+          maxLength: 2604
+          description: Canonical Base64 of 1952 bytes
+    SigningKey:
+      type: object
+      additionalProperties: false
+      required:
+        - scheme
+        - publicKey
+      properties:
+        scheme:
+          type: string
+          const: ml-dsa-65
+        publicKey:
+          type: string
+          minLength: 2604
+          maxLength: 2604
+          description: Canonical Base64 of 1952 bytes
+    KelEvent:
+      description: "One key event (01-identity.md). Verified by the verifier rules, not by this schema."
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required:
+            - t
+            - seq
+            - ts
+            - root
+            - next
+            - sig
+          properties:
+            t:
+              const: icp
+            seq:
+              const: 0
+            ts:
+              "$ref": "#/components/schemas/WireInt"
+            root:
+              "$ref": "#/components/schemas/RootKey"
+            next:
+              "$ref": "#/components/schemas/Hex64"
+            sig:
+              "$ref": "#/components/schemas/KelSignature"
+          title: icp
+        - type: object
+          additionalProperties: false
+          required:
+            - t
+            - seq
+            - ts
+            - prev
+            - root
+            - next
+            - sig
+          properties:
+            t:
+              const: rot
+            seq:
+              "$ref": "#/components/schemas/WireInt"
+            ts:
+              "$ref": "#/components/schemas/WireInt"
+            prev:
+              "$ref": "#/components/schemas/Hex64"
+            root:
+              "$ref": "#/components/schemas/RootKey"
+            next:
+              "$ref": "#/components/schemas/Hex64"
+            sig:
+              "$ref": "#/components/schemas/KelSignature"
+          title: rot
+        - type: object
+          additionalProperties: false
+          required:
+            - t
+            - seq
+            - ts
+            - prev
+            - key
+            - sig
+          properties:
+            t:
+              const: dlg
+            seq:
+              "$ref": "#/components/schemas/WireInt"
+            ts:
+              "$ref": "#/components/schemas/WireInt"
+            prev:
+              "$ref": "#/components/schemas/Hex64"
+            key:
+              "$ref": "#/components/schemas/SigningKey"
+            notAfter:
+              "$ref": "#/components/schemas/WireInt"
+            sig:
+              "$ref": "#/components/schemas/KelSignature"
+          title: dlg
+    Kel:
+      type: array
+      minItems: 1
+      maxItems: 256
+      items:
+        "$ref": "#/components/schemas/KelEvent"
+    Signature:
+      type: object
+      additionalProperties: false
+      description: "Delegated signature over encodePayload(\"ace.v1\", aceId, decimal(timestamp), decimal(seq), payload), ctx = action"
+      required:
+        - scheme
+        - seq
+        - value
+      properties:
+        scheme:
+          type: string
+          const: ml-dsa-65
+        seq:
+          "$ref": "#/components/schemas/WireInt"
+        value:
+          type: string
+          minLength: 4412
+          maxLength: 4412
+          description: Canonical Base64 of 3309 bytes
+    RegistrationRequest:
+      type: object
+      additionalProperties: false
+      description: "Action register-request, payload encodePayload(lastHashHex, audience); audience is the relay's public URL; at most 1048576 bytes"
+      required:
+        - aceId
+        - kel
+        - timestamp
+        - audience
+        - signature
+      properties:
+        aceId:
+          "$ref": "#/components/schemas/AceId"
+        kel:
+          "$ref": "#/components/schemas/Kel"
+        timestamp:
+          "$ref": "#/components/schemas/WireInt"
+        audience:
+          "$ref": "#/components/schemas/RelayUrl"
+        signature:
+          "$ref": "#/components/schemas/Signature"
+    Packet:
+      type: object
+      additionalProperties: false
+      description: "03-packet.md; canonical JSON at most 2097152 bytes"
+      required:
+        - ace
+        - messageId
+        - from
+        - to
+        - timestamp
+        - encryption
+        - signature
+      properties:
+        ace:
+          const: "1"
+        messageId:
+          "$ref": "#/components/schemas/Uuid4"
+        from:
+          "$ref": "#/components/schemas/AceId"
+        to:
+          "$ref": "#/components/schemas/AceId"
+        timestamp:
+          "$ref": "#/components/schemas/WireInt"
+        encryption:
+          type: object
+          additionalProperties: false
+          required:
+            - prekey
+            - kemCiphertext
+            - payload
+          properties:
+            prekey:
+              "$ref": "#/components/schemas/Hex64"
+            kemCiphertext:
+              type: string
+              minLength: 1496
+              maxLength: 1496
+              description: Canonical Base64 of 1120 bytes
+            payload:
+              type: string
+              description: "Canonical Base64 of 28..1179676 bytes (MAX_PLAINTEXT_BYTES + 28)"
+        signature:
+          "$ref": "#/components/schemas/Signature"
+    Permit:
+      type: object
+      additionalProperties: false
+      description: "Delivery permit (05-admission.md), action delivery-permit, lifetime at most 2592000 seconds"
+      required:
+        - issuer
+        - subject
+        - issuedAt
+        - expiresAt
+        - signature
+      properties:
+        issuer:
+          "$ref": "#/components/schemas/AceId"
+        subject:
+          "$ref": "#/components/schemas/AceId"
+        issuedAt:
+          "$ref": "#/components/schemas/WireInt"
+        expiresAt:
+          "$ref": "#/components/schemas/WireInt"
+        signature:
+          "$ref": "#/components/schemas/Signature"
+    Caip10Account:
+      type: string
+      pattern: "^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}:[-.%a-zA-Z0-9]{1,128}$"
+    CardRecord:
+      type: object
+      additionalProperties: false
+      description: "04-descriptor.md § Card record, action card-record, timestamp issuedAt, payload canonicalStateBytes(claims); canonical JSON at most 16384 bytes; no expiry"
+      required:
+        - aceId
+        - issuedAt
+        - home
+        - card
+        - contact
+        - listed
+        - signature
+      properties:
+        aceId:
+          "$ref": "#/components/schemas/AceId"
+        issuedAt:
+          "$ref": "#/components/schemas/WireInt"
+        home:
+          "$ref": "#/components/schemas/RelayUrl"
+        handle:
+          "$ref": "#/components/schemas/Handle"
+        card:
+          "$ref": "#/components/schemas/Card"
+        pay:
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            "$ref": "#/components/schemas/Caip10Account"
+        erc8004:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - agentRegistry
+              - agentId
+            properties:
+              agentRegistry:
+                "$ref": "#/components/schemas/Caip10Account"
+              agentId:
+                type: string
+                description: "Chain-native agent ID; when agentRegistry's namespace is eip155, a decimal ERC-721 token ID ^(0|[1-9][0-9]{0,77})$ (04-descriptor.md § Card record)"
+                pattern: "^[A-Za-z0-9]{1,128}$"
+        contact:
+          type: string
+          enum:
+            - open
+            - closed
+        listed:
+          type: boolean
+        signature:
+          "$ref": "#/components/schemas/Signature"
+    CardBundle:
+      type: object
+      additionalProperties: false
+      description: Canonical JSON at most 1048576 bytes
+      required:
+        - kel
+        - card
+      properties:
+        kel:
+          "$ref": "#/components/schemas/Kel"
+        card:
+          "$ref": "#/components/schemas/CardRecord"
+    Card:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        description:
+          type: string
+          maxLength: 256
+        image:
+          "$ref": "#/components/schemas/HttpsUrl"
+        tags:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[a-z0-9-]{1,32}$"
+    Descriptor:
+      type: object
+      additionalProperties: false
+      description: "04-descriptor.md, action agent-descriptor, timestamp issuedAt, payload canonicalStateBytes(claims)"
+      required:
+        - aceId
+        - issuedAt
+        - expiresAt
+        - relays
+        - prekey
+        - profiles
+        - signature
+      properties:
+        aceId:
+          "$ref": "#/components/schemas/AceId"
+        issuedAt:
+          "$ref": "#/components/schemas/WireInt"
+        expiresAt:
+          "$ref": "#/components/schemas/WireInt"
+        relays:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            "$ref": "#/components/schemas/RelayUrl"
+        prekey:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - publicKey
+          properties:
+            id:
+              "$ref": "#/components/schemas/Hex64"
+            publicKey:
+              type: string
+              minLength: 1624
+              maxLength: 1624
+              description: Canonical Base64 of 1216 bytes (X-Wing)
+        profiles:
+          type: array
+          maxItems: 32
+          description: "Distinct ids; ace:core:1 is never listed"
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - digest
+            properties:
+              id:
+                "$ref": "#/components/schemas/ProfileId"
+              digest:
+                "$ref": "#/components/schemas/Hex64"
+        ext:
+          type: object
+          additionalProperties:
+            type: object
+          description: "Keys are listed profile IDs; canonical JSON at most 32768 bytes"
+        signature:
+          "$ref": "#/components/schemas/Signature"
+    PublishedAgent:
+      type: object
+      additionalProperties: false
+      description: Canonical JSON at most 1048576 bytes
+      required:
+        - kel
+        - descriptor
+      properties:
+        kel:
+          "$ref": "#/components/schemas/Kel"
+        descriptor:
+          "$ref": "#/components/schemas/Descriptor"
+    WakeRegistration:
+      type: object
+      additionalProperties: false
+      required:
+        - gateway
+        - token
+      properties:
+        gateway:
+          "$ref": "#/components/schemas/RelayUrl"
+        token:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{22,512}$"
+          description: "Opaque gateway-issued token; the whole body of a wake is {\"token\": token}"
+    InboxEntry:
+      type: object
+      required:
+        - streamId
+        - packet
+      properties:
+        streamId:
+          "$ref": "#/components/schemas/StreamId"
+        packet:
+          "$ref": "#/components/schemas/Packet"
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            "$ref": "#/components/schemas/Error"
+    TooManyRequests:
+      description: rate_limited or recipient_inbox_full
+      headers:
+        Retry-After:
+          schema:
+            type: string
+            pattern: "^[0-9]+$"
+      content:
+        application/json:
+          schema:
+            "$ref": "#/components/schemas/Error"

@@ -451,17 +451,17 @@ kel_valid = []
 for a in AGENTS.values():
     st = a.state
     kel_valid.append({"agent": a.name, "now": NOW, "aceId": a.id, "seq": st.seq, "lastHash": st.last_hash, "rootScheme": st.root_scheme,
-                      "next": st.next, "signing": {"seq": st.signing.seq, "notAfter": st.signing.not_after}, "usable": True})
+                      "next": st.next, "fallback": st.fallback, "signing": {"seq": st.signing.seq, "notAfter": st.signing.not_after}, "usable": True})
 kel_valid.append({"agent": "carol", "now": NOW + 100, "aceId": carol.id, "seq": 1, "lastHash": carol.state.last_hash, "rootScheme": "ml-dsa-65",
-                  "next": carol.state.next, "signing": {"seq": 1, "notAfter": NOW + 100}, "usable": False})
+                  "next": carol.state.next, "fallback": None, "signing": {"seq": 1, "notAfter": NOW + 100}, "usable": False})
 _b2, _b3 = verify_kel(bob.kel[:2], NOW), verify_kel(bob.kel[:3], NOW)
 kel_valid.append({"agent": "bob", "events": 2, "now": NOW, "aceId": bob.id, "seq": 1, "lastHash": _b2.last_hash,
-                  "rootScheme": "ml-dsa-65", "next": _b2.next, "signing": {"seq": 1, "notAfter": None}, "usable": True})
+                  "rootScheme": "ml-dsa-65", "next": _b2.next, "fallback": None, "signing": {"seq": 1, "notAfter": None}, "usable": True})
 kel_valid.append({"agent": "bob", "events": 3, "now": NOW, "aceId": bob.id, "seq": 2, "lastHash": _b3.last_hash,
-                  "rootScheme": "ml-dsa-65", "next": _b3.next, "signing": None, "usable": False})
+                  "rootScheme": "ml-dsa-65", "next": _b3.next, "fallback": None, "signing": None, "usable": False})
 for c in kel_valid:
     st = verify_kel(AGENTS[c["agent"]].kel[: c.get("events")], c["now"])
-    assert st.ace_id == c["aceId"] and st.seq == c["seq"] and st.last_hash == c["lastHash"]
+    assert st.ace_id == c["aceId"] and st.seq == c["seq"] and st.last_hash == c["lastHash"] and st.fallback == c["fallback"]
     assert is_usable(st, c["now"]) == c["usable"]
 
 event_bytes_cases = [{"event": ev, "hex": event_bytes(ev).hex()} for ev in bob.kel + [carol.kel[1]]]
@@ -477,6 +477,44 @@ f_rot = create_rotation(f_s, f_next, key_digest("ml-dsa-65", f_next2.public_key(
 f_rot_d = create_signing_delegation(verify_kel([f_icp, f_rot], T0 + 3), f_next, key("frank-s3").public_key(), T0 + 3)
 f_rot2 = create_rotation(f_s, f_next, key_digest("ml-dsa-65", key("frank-next-3").public_key()), T0 + 4)
 f_rot2_d = create_signing_delegation(verify_kel([f_icp, f_rot2], T0 + 4), f_next, key("frank-s4").public_key(), T0 + 4)
+
+def dg(k):
+    return key_digest("ml-dsa-65", k.public_key())
+
+
+# grace: next root g1 and a fallback root b0; b0's rot carries g1's commitment and commits b1
+g0, g1, g2, b0, b1 = key("grace-root"), key("grace-next"), key("grace-next-2"), key("grace-fallback"), key("grace-fallback-2")
+g_icp = create_inception(g0, dg(g1), T0, dg(b0))
+g_s = verify_kel([g_icp], T0)
+g_d1 = create_signing_delegation(g_s, g0, key("grace-s1").public_key(), T0)
+g_s1 = verify_kel([g_icp, g_d1], T0)
+g_d2 = create_signing_delegation(g_s1, g0, key("grace-s2").public_key(), T0 + 1)
+g_frot = create_rotation(g_s1, b0, dg(g1), T0 + 2, dg(b1))
+g_frot_d = create_signing_delegation(verify_kel([g_icp, g_d1, g_frot], T0 + 2), b0, key("grace-s3").public_key(), T0 + 2)
+g_prot = create_rotation(g_s1, g1, dg(g2), T0 + 3, dg(b0))
+g_prot_d = create_signing_delegation(verify_kel([g_icp, g_d1, g_prot], T0 + 3), g1, key("grace-s4").public_key(), T0 + 3)
+# a thief holding b0: its fallback rot commits its own keys, then it rotates again with them
+t1, t2 = key("thief-next"), key("thief-fallback")
+g_trot = create_rotation(g_s1, b0, dg(t1), T0 + 2, dg(t2))
+g_trot2 = create_rotation(verify_kel([g_icp, g_d1, g_trot], T0 + 2), t1, dg(key("thief-next-2")), T0 + 3)
+g_trot2_d = create_signing_delegation(verify_kel([g_icp, g_d1, g_trot, g_trot2], T0 + 3), t1, key("thief-s").public_key(), T0 + 3)
+G_FALLBACK = [g_icp, g_d1, g_frot, g_frot_d]
+G_PRIMARY = [g_icp, g_d1, g_prot, g_prot_d]
+G_THIEF = [g_icp, g_d1, g_trot, g_trot2, g_trot2_d]
+# after the backup's recovery the next root g1 rotates in; g1, now revealed, could be stolen as a current root
+_g_back = verify_kel(G_FALLBACK, T0 + 3)
+g_back = create_rotation(_g_back, g1, dg(g2), T0 + 3, dg(b1))
+G_BACK = G_FALLBACK + [g_back, create_signing_delegation(verify_kel(G_FALLBACK + [g_back], T0 + 3), g1, key("grace-s5").public_key(), T0 + 3)]
+assert verify_kel(G_FALLBACK, NOW).next == dg(g1).hex() and verify_kel(G_FALLBACK, NOW).fallback == dg(b1).hex()
+assert verify_kel(G_PRIMARY, NOW).fallback == dg(b0).hex()
+event_bytes_cases += [{"event": ev, "hex": event_bytes(ev).hex()} for ev in (g_icp, g_frot)]
+# shape failures come before any signature, so these keep their (now stale) signatures
+bad_kel("fallback equal to next", [{**g_icp, "fallback": g_icp["next"]}], "invalid_kel")
+bad_kel("fallback not 64 lowercase hex", [{**g_icp, "fallback": g_icp["fallback"].upper()}], "invalid_kel")
+bad_kel("fallback member on a dlg", [A_KEL[0], {**A_KEL[1], "fallback": "ab" * 32}], "invalid_kel")
+_again = {**g_trot, "seq": 4, "ts": T0 + 2, "prev": hashlib.sha256(event_bytes(g_frot_d)).hexdigest()}
+bad_kel("rot reveals the fallback an earlier rot already revealed", G_FALLBACK + [resign(_again, b0, g_s.ace_id)], "invalid_kel")
+
 FORKS = [
     ("no pin: adopted", None, [f_icp, f_d1], "adopted", 1),
     ("equal: unchanged", [f_icp, f_d1], [f_icp, f_d1], "unchanged", 1),
@@ -486,6 +524,14 @@ FORKS = [
     ("dlg fork: kel_conflict", [f_icp, f_d1], [f_icp, f_d1b], "kel_conflict", None),
     ("rot fork against a pinned rot: kel_conflict", [f_icp, f_rot, f_rot_d], [f_icp, f_rot2, f_rot2_d], "kel_conflict", None),
     ("different identity: kel_conflict", [f_icp, f_d1], alice.kel, "kel_conflict", None),
+    ("fallback rot at the fork point, no rot pinned after it: recovered", [g_icp, g_d1, g_d2], G_FALLBACK, "recovered", 3),
+    ("primary rot against a pinned fallback rot: recovered", G_FALLBACK, G_PRIMARY, "recovered", 3),
+    ("primary rot against a pinned fallback rot followed by other rots: recovered", G_THIEF, G_PRIMARY, "recovered", 3),
+    ("primary rot re-revealing a root the pinned log revealed after the fallback rot: kel_conflict", G_BACK, G_PRIMARY, "kel_conflict", None),
+    ("fallback rot against a pinned primary rot: kel_conflict", G_PRIMARY, G_FALLBACK, "kel_conflict", None),
+    ("fallback rot against a pinned fallback rot: kel_conflict", G_FALLBACK, G_THIEF, "kel_conflict", None),
+    ("primary rot after the fork point of a pinned fallback rot: kel_conflict", G_THIEF, [g_icp, g_d1, g_d2, create_rotation(
+        verify_kel([g_icp, g_d1, g_d2], T0 + 3), g1, dg(g2), T0 + 3, dg(b0))], "kel_conflict", None),
 ]
 fork_cases = []
 for name, pinned, cand, want, seq in FORKS:
@@ -496,7 +542,8 @@ for name, pinned, cand, want, seq in FORKS:
     else:
         st, got = extend_kel(pin_state, cand, NOW)
         assert got == want and st.seq == seq, (name, got)
-        fork_cases.append({"name": name, "pinned": pinned, "candidate": cand, "now": NOW, "outcome": want, "seq": seq})
+        fork_cases.append({"name": name, "pinned": pinned, "candidate": cand, "now": NOW, "outcome": want, "seq": seq,
+                           "next": st.next, "fallback": st.fallback})
 
 # operational signatures (01 § Operational signatures)
 OP_PAYLOAD = b"operational-vector"

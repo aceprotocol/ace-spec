@@ -780,6 +780,8 @@ components:
               "$ref": "#/components/schemas/RootKey"
             next:
               "$ref": "#/components/schemas/Hex64"
+            fallback:
+              "$ref": "#/components/schemas/Hex64"
             sig:
               "$ref": "#/components/schemas/KelSignature"
           title: icp
@@ -805,6 +807,8 @@ components:
             root:
               "$ref": "#/components/schemas/RootKey"
             next:
+              "$ref": "#/components/schemas/Hex64"
+            fallback:
               "$ref": "#/components/schemas/Hex64"
             sig:
               "$ref": "#/components/schemas/KelSignature"

@@ -5,7 +5,7 @@ An ACE identity is defined by a **key event log** (KEL): an ordered list of sign
 An identity holds:
 
 1. A **root key** (`ml-dsa-65`) that signs only KEL events.
-2. A **committed next root**: the SHA-256 digest of the key that will replace the root. Control is anchored in this commitment, not in a signature algorithm.
+2. A **committed next root**: the SHA-256 digest of the key that will replace the root. Control is anchored in this commitment, not in a signature algorithm. Optionally, a **committed fallback root**: the digest of a second key that may replace the root instead, ranked below the next root ([§ Rotation and recovery](#rotation-and-recovery)).
 3. A **signing key** (`ml-dsa-65`, 1952-byte public key) delegated by the root and used for every signature outside the KEL.
 
 ## ACE ID
@@ -18,23 +18,23 @@ aceId = "ace:sha256:" || lowercaseHex(SHA-256(icpBytes))
 
 ## Key event log
 
-Every event carries `t`, `seq` (0, then +1 per event), `ts` (wire integer, non-decreasing, `ts <= now + TIMESTAMP_WINDOW_SECONDS`) and, after the inception, `prev` (64 lowercase hex: SHA-256 of the previous event's canonical bytes). Objects are closed. `next` is 64 lowercase hex; `publicKey` members are canonical Base64 ([02](02-encoding.md#base64)).
+Every event carries `t`, `seq` (0, then +1 per event), `ts` (wire integer, non-decreasing, `ts <= now + TIMESTAMP_WINDOW_SECONDS`) and, after the inception, `prev` (64 lowercase hex: SHA-256 of the previous event's canonical bytes). Objects are closed. `next` and `fallback` are 64 lowercase hex; `publicKey` members are canonical Base64 ([02](02-encoding.md#base64)).
 
 | `t` | Members | Signed by | Effect |
 |---|---|---|---|
-| `icp` | `root{scheme,publicKey}`, `next`, `sig` | the root | creates the identity; commits the next root |
-| `rot` | `prev`, `root{scheme,publicKey}`, `next`, `sig` | the new root alone | `SHA-256(UTF-8(scheme) ‖ 0x00 ‖ publicKey)` of the new root MUST equal the committed `next`; replaces the root; revokes the signing delegation |
+| `icp` | `root{scheme,publicKey}`, `next`, `fallback`?, `sig` | the root | creates the identity; commits the next root and, optionally, a fallback root |
+| `rot` | `prev`, `root{scheme,publicKey}`, `next`, `fallback`?, `sig` | the new root alone | `SHA-256(UTF-8(scheme) ‖ 0x00 ‖ publicKey)` of the new root MUST equal the committed `next` (a **primary** `rot`) or the committed `fallback` (a **fallback** `rot`); replaces the root and both commitments; revokes the signing delegation |
 | `dlg` | `prev`, `key{scheme,publicKey}`, `notAfter`?, `sig` | the current root | delegates the signing key, replacing any previous one |
 
 Canonical bytes ([`encodePayload`, `decimal`](02-encoding.md#signatures)):
 
 ```
-icp: encodePayload("icp", decimal(seq), decimal(ts), root.scheme, rootPublicKeyBytes, nextDigestBytes)
-rot: encodePayload("rot", decimal(seq), decimal(ts), prev, root.scheme, rootPublicKeyBytes, nextDigestBytes)
+icp: encodePayload("icp", decimal(seq), decimal(ts), root.scheme, rootPublicKeyBytes, nextDigestBytes[, fallbackDigestBytes])
+rot: encodePayload("rot", decimal(seq), decimal(ts), prev, root.scheme, rootPublicKeyBytes, nextDigestBytes[, fallbackDigestBytes])
 dlg: encodePayload("dlg", decimal(seq), decimal(ts), prev, key.scheme, keyPublicKeyBytes, notAfterOrEmpty)
 ```
 
-`prev` is the 64-character hex string; key and digest fields are decoded bytes; `notAfterOrEmpty` is `decimal(notAfter)` or the empty string.
+`prev` is the 64-character hex string; key and digest fields are decoded bytes; `notAfterOrEmpty` is `decimal(notAfter)` or the empty string. `fallbackDigestBytes` is a field only when `fallback` is present; every field is length-prefixed, so the two forms never collide.
 
 `sig` is `{scheme, value}` (no `seq`), REQUIRED on every event and never part of the canonical bytes. It is an ML-DSA signature with action `kel` over `M` with `aceId`, `timestamp = ts`, an empty `seqOrEmpty` and payload `eventBytes` ([02](02-encoding.md#signatures)); for `icp` the ACE ID is computed from `eventBytes` first. `sig.scheme` MUST equal the scheme of the signing root.
 
@@ -42,12 +42,12 @@ dlg: encodePayload("dlg", decimal(seq), decimal(ts), prev, key.scheme, keyPublic
 
 A verifier replays the log from `seq` 0 in this order. Structural failures are `invalid_kel`; a well-formed signature that does not verify is `invalid_signature`.
 
-1. **Structure, before any signature:** at most `MAX_KEL_EVENTS` events; `icp` only at `seq` 0; closed members and field shapes; contiguous `seq`; non-decreasing `ts` with `ts <= now + TIMESTAMP_WINDOW_SECONDS`; `prev` equals the hash of the previous event.
+1. **Structure, before any signature:** at most `MAX_KEL_EVENTS` events; `icp` only at `seq` 0; closed members and field shapes; `fallback`, when present, differs from `next`; contiguous `seq`; non-decreasing `ts` with `ts <= now + TIMESTAMP_WINDOW_SECONDS`; `prev` equals the hash of the previous event.
 2. **`icp`:** the root is `ml-dsa-65` with a 1952-byte key; then `sig` verifies under it.
-3. **`rot`:** the new root is a valid `ml-dsa-65` key; its commitment MUST match the previous `next` (checked before any signature); `sig.scheme` equals the new root's scheme; `sig` verifies under the new root, and the old root takes no part. After a `rot` no signing key is delegated until a new `dlg`.
+3. **`rot`:** the new root is a valid `ml-dsa-65` key; its commitment MUST match the `next` (primary) or the `fallback` (fallback) committed by the last `icp` or `rot` before it (checked before any signature); `sig.scheme` equals the new root's scheme; `sig` verifies under the new root, and the old root takes no part. After a `rot` no signing key is delegated until a new `dlg`.
 4. **`dlg`:** `sig` verifies under the current root, then: `key.scheme` is `ml-dsa-65` with a 1952-byte key; `notAfter`, when present, satisfies `ts < notAfter <= ts + MAX_SIGNING_KEY_LIFETIME`. Without `notAfter` the key lives until replaced. A new `dlg` protects only verifiers that see it: to a verifier shown a log that ends before it, `notAfter` is the only bound on a stolen signing key, so a `dlg` SHOULD carry `notAfter`.
 5. **Usable.** An identity is usable at time `t` when a signing key is delegated and, if `notAfter` is set, `t < notAfter`. A relay MUST NOT register an unusable identity and a peer MUST NOT send to one.
-6. **Forks.** At the first `seq` where a candidate log and the pinned log differ (the fork point), the candidate supersedes the pinned events from that point only when the candidate's event there is a `rot` and none of the pinned events at or after it is a `rot` (recovery by the holder of the committed next root). Otherwise the pinned log is kept and the candidate is `kel_conflict`. A candidate naming a different ACE ID is `kel_conflict`.
+6. **Forks.** At the first `seq` where a candidate log and the pinned log differ (the fork point), the candidate supersedes the pinned events from that point only when the candidate's event there is a `rot` and either none of the pinned events at or after it is a `rot` (recovery by the holder of a committed root), or the candidate's `rot` is primary, the pinned event there is a fallback `rot` and no pinned event at or after it reveals the root the candidate's `rot` reveals (the next root reclaims the identity from the fallback root; a root the pinned log already revealed may be stolen and never reclaims). Otherwise the pinned log is kept and the candidate is `kel_conflict`. A candidate naming a different ACE ID is `kel_conflict`.
 7. An endpoint never prunes a pinned log.
 
 ### Operational signatures
@@ -76,11 +76,12 @@ Which descriptor is pinned under a log is decided in [04](04-descriptor.md#cachi
 ## Rotation and recovery
 
 - **Signing key compromise:** a new root-signed `dlg` replaces the key; signatures with the superseded `seq` stop verifying wherever the new `dlg` is seen. `notAfter` bounds a software key's life.
-- **Root compromise:** the thief cannot rotate. The holder of the next root appends a `rot` that forks the log at the start of the current root epoch (after its last `icp` or `rot`), revoking every delegation of that epoch, followed by a fresh `dlg`. Peers adopt it as `extended` or `recovered` (rule 6).
+- **Root compromise:** the thief cannot rotate. The holder of the next root (or of the fallback root) appends a `rot` that forks the log at the start of the current root epoch (after its last `icp` or `rot`), revoking every delegation of that epoch, followed by a fresh `dlg`. Peers adopt it as `extended` or `recovered` (rule 6).
 - **Device loss with the next root kept elsewhere:** recover the same way from a copy of the log (for example from a relay).
-- A signer MUST refuse to sign a `next` that commits to any root or `dlg` key its log has revealed, a `dlg` whose key equals the current root, and a `dlg` whose key's commitment equals the current `next`. A verifier can detect reuse only of keys the log reveals, so these are signer-side refusals.
+- **Fallback root.** An owner who keeps a second, independently stored key commits it as `fallback`; either key can then recover alone. A `rot` that does not reveal a commitment carries it unchanged: a primary `rot` copies the previous `fallback` to keep it, a fallback `rot` copies the previous `next` to keep the next root's precedence. Omitting `fallback` removes it. The two keys are not symmetric: a fallback `rot` can always be superseded by a primary `rot` at the same `seq` (rule 6), so the holder of the next root reclaims the identity from a stolen fallback root with a primary `rot` at the `seq` of the thief's fallback `rot`, revoking every delegation and commitment made after it, as long as no later event revealed that next root.
+- A signer MUST refuse to sign a `next` or `fallback` that commits to any root or `dlg` key its log has revealed, a `dlg` whose key equals the current root, and a `dlg` whose key's commitment equals the current `next` or `fallback`. A verifier can detect reuse only of keys the log reveals, so these are signer-side refusals.
 - A signer MUST persist a `rot` before publishing it, and MUST NOT sign a second event for a `seq` it has already signed.
-- Losing the root and the next root together, or the next root stored on a lost device, is loss of the identity.
-- **Next-root compromise** is loss of the identity: the thief can rotate, revoke every delegation and commit a next root of its own, and nothing recovers from that. The next root MUST be stored at least as strongly as the root, and apart from it.
+- Losing the root and every committed root together (the next root, and the fallback root if any), or keeping them all on one lost device, is loss of the identity.
+- **Next-root compromise** is loss of the identity: the thief can rotate, revoke every delegation and commit a next root of its own, and nothing recovers from that, a fallback root included. The next root MUST be stored at least as strongly as the root, and apart from it. **Fallback-root compromise** lasts until the next root reclaims the identity, as above: until then peers that saw the thief's log accept its signatures. The fallback root MUST be stored apart from both.
 
 Residual risk: a peer whose pin predates the reveal of a stolen root can be re-forked out of band until it refreshes from a relay holding the full log, and a verifier shown a log ending before a `dlg` accepts the key it replaced until its `notAfter` (rule 4). Both are inherent to single-signature pre-rotation without witnesses. A relay that has deleted an unregistered identity's KEL checks re-registrations against a fixed-size horizon instead ([07](07-relay.md#registration)).

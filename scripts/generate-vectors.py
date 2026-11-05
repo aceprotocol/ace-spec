@@ -51,7 +51,7 @@ from ace.commerce import ThreadStore, commerce_rules, validate_commerce_ext
 from ace.card_record import validate_erc8004
 from ace.identity import sign_claims
 from ace.kel import create_inception, create_rotation, create_signing_delegation, event_bytes
-from ace.packet import aead_key, check_window, packet_header, packet_sign_payload
+from ace.packet import _create_packet, aead_key, check_window, packet_header, packet_sign_payload
 from ace.prekeys import _entry, _Peer, _State
 from ace.relay import map_relay_response
 from ace.rules import MessageEvent
@@ -558,7 +558,7 @@ AEAD_KEY = HKDF(algorithm=hashes.SHA256(), length=32, salt=SALT, info=header).de
 assert AEAD_KEY == aead_key(SS, header)
 payload = PKT_NONCE + AESGCM(AEAD_KEY).encrypt(PKT_NONCE, PLAINTEXT, header)
 
-det_packet = create_packet(alice.identity, bob.id, BOB_PREKEY, PLAINTEXT, timestamp=NOW, message_id=PKT_MID, _kem=(SS, KEM), _nonce=PKT_NONCE)
+det_packet = _create_packet(alice.identity, bob.id, BOB_PREKEY, PLAINTEXT, NOW, PKT_MID, lambda _pk: (SS, KEM), PKT_NONCE)
 assert det_packet["encryption"] == {"prekey": BOB_PREKEY["id"], "kemCiphertext": b64(KEM), "payload": b64(payload)}
 sign_payload = packet_sign_payload(bob.id, PKT_MID, BOB_PREKEY["id"], KEM, payload)
 packet_message = signing_message(alice.id, NOW, alice.seq, sign_payload)

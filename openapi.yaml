@@ -218,6 +218,37 @@ paths:
           "$ref": "#/components/responses/TooManyRequests"
         "500":
           "$ref": "#/components/responses/Error"
+  "/v1/fallbacks/{digest}":
+    get:
+      summary: Find a log by a fallback commitment
+      description: "07 § Registration (fallback bindings). The registered KEL of the identity the fallback digest is bound to; otherwise unknown_peer. Clients verify the KEL and that it commits the digest as a fallback."
+      parameters:
+        - name: digest
+          in: path
+          required: true
+          schema:
+            "$ref": "#/components/schemas/Hex64"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - kel
+                properties:
+                  kel:
+                    "$ref": "#/components/schemas/Kel"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/TooManyRequests"
+        "500":
+          "$ref": "#/components/responses/Error"
   "/v1/cards":
     get:
       summary: Public directory

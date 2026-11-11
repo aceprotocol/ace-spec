@@ -11,7 +11,6 @@ Every package is pure source: there is no native or WASM engine to build. Crypto
 | `sdk-swift` | SwiftPM package `ace-sdk-swift` | product `ACE` (one target, no dependencies) |
 | `relay` | npm `@ace-protocol/relay`, container image | `dist/src/server.js` |
 | `ace-cli` | npm `@ace-protocol/cli` | `ace` binary |
-| `ace-mcp` | npm `@ace-protocol/mcp`, container image | hosted MCP server |
 
 Use Node 24, Python 3.10+ and Swift 6.2+ on macOS 26+. The release manifest records full source commits. Fetch those commits before building; do not substitute floating branches. Publish the source commits before running remote workflows that check them out.
 
@@ -20,11 +19,11 @@ Use Node 24, Python 3.10+ and Swift 6.2+ on macOS 26+. The release manifest reco
 From the directory containing all repositories:
 
 ```sh
-for p in sdk-ts relay ace-cli ace-mcp; do npm --prefix $p ci && npm --prefix $p run build; done
+for p in sdk-ts relay ace-cli; do npm --prefix $p ci && npm --prefix $p run build; done
 node ace-spec/release/package-node.mjs /tmp/ace-release-candidate/node
 ```
 
-`package-node.mjs` refuses a checkout with uncommitted changes, stages each distribution (`dist`, plus `resources`, `openapi.yaml`, `LICENSE`, `README.md` where present), replaces sibling `file:` dependencies with the exact release versions and emits tarballs plus `manifest.json` (repository, commit, package, version, SHA-256). The source checkouts keep their development workspace dependencies. Install all four tarballs together into an empty consumer directory; this resolves the unpublished exact dependencies locally:
+`package-node.mjs` refuses a checkout with uncommitted changes, stages each distribution (`dist`, plus `resources`, `openapi.yaml`, `LICENSE`, `README.md` where present), replaces sibling `file:` dependencies with the exact release versions and emits tarballs plus `manifest.json` (repository, commit, package, version, SHA-256). The source checkouts keep their development workspace dependencies. Install all three tarballs together into an empty consumer directory; this resolves the unpublished exact dependencies locally:
 
 ```sh
 mkdir -p /tmp/ace-consumer && cd /tmp/ace-consumer && npm init -y

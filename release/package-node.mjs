@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = resolve(process.argv[2] ?? '/tmp/ace-release-candidate/node');
 await mkdir(output, { recursive: true });
-const names = ['sdk-ts', 'ace-cli', 'relay', 'ace-mcp'];
+const names = ['sdk-ts', 'ace-cli', 'relay'];
 const packages = new Map(await Promise.all(names.map(async n => [n, JSON.parse(await readFile(join(root,n,'package.json'),'utf8'))])));
 const byName = new Map([...packages.values()].map(p => [p.name, p]));
 const EXTRAS = ['resources','openapi.yaml','LICENSE','README.md'];

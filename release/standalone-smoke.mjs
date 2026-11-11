@@ -1,5 +1,5 @@
 // Smoke test of the installed Node release tarballs (see README.md). Run from a consumer directory where
-// @ace-protocol/{sdk,relay,cli,mcp} were installed from the tarballs. Needs a disposable Redis (default
+// @ace-protocol/{sdk,relay,cli} were installed from the tarballs. Needs a disposable Redis (default
 // redis://127.0.0.1:16379, ACE_SMOKE_REDIS) and uses ONLY databases 14 and 15 (ACE_SMOKE_DBS=a,b), which it flushes.
 //
 // Checks: the installed CLI creates an identity; the installed relay serves two loopback listeners; the SDK

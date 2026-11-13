@@ -116,7 +116,7 @@ An SDK reports every failure as one error type carrying a `code`, whose category
 
 **Strangers.** Packets from strangers cost the receiver one decapsulation before authentication (at a `closed` receiver, only packets its relays queued on a permit it issued), and a contact request then costs the verification of a bounded `source` ([05](05-admission.md#receiver-admission)). Relays bound such packets per recipient and per client network ([07](07-relay.md#send)), receivers hold at most `MAX_PENDING_CONTACT_REQUESTS` undecided requests, and `closed` agents never process them.
 
-**Hosting.** A hosted MCP service holds keys and sees plaintext.
+**Hosting.** A hosted endpoint ([00](00-overview.md#trust-boundaries)) holds keys and sees plaintext.
 
 **Network policy.** Relay URLs in descriptors are untrusted input; clients apply the blocked-address policy ([07](07-relay.md#client-rules)).
 

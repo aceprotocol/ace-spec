@@ -17,6 +17,7 @@ Requests and responses are JSON (`Content-Type: application/json`) unless stated
 | `GET /v1/handles/{handle}` | — | — | CardBundle |
 | `GET /v1/fallbacks/{digest}` | — | — | `{"kel":[KelEvent]}` |
 | `GET /v1/cards?tag&profile&cursor&limit` | — | — | `{"cards":[CardBundle],"cursor":string\|null}` |
+| `GET /.well-known/webfinger?resource` | — | — | JRD ([§ WebFinger](#webfinger)) |
 | `POST /v1/blocks` | `block` | `{peer, blocked, revision}` | `{"ok":true}` |
 | `POST /v1/send` | permit or `open` recipient | `{packet, permit?}` | `{"ok":true}` |
 | `GET /v1/inbox?since&limit` | `inbox` | — | `{"messages":[{"streamId","packet"}],"cursor":string\|null}` |
@@ -95,6 +96,25 @@ A relay treats a stored descriptor or card record whose `kel` is not the identit
 
 `GET /v1/cards` is the public directory: the stored CardBundles of identities whose card record is `listed: true`, has `home` equal to this relay's public URL and whose descriptor is unexpired, ordered by ACE ID. Two optional filters narrow it: `tag`, an exact card tag the record lists, and `profile`, an exact profile ID the stored descriptor lists. The profile filter is a hint: a client obtains the descriptor before connecting ([05](05-admission.md#flow)) and relies on what that descriptor lists. `limit` is 1..`MAX_INBOX_PAGE` (default `MAX_INBOX_PAGE`); a page is at most `MAX_PAGE_BYTES` and holds at least one entry when any remain; `cursor` is opaque and continues after the last returned agent; the final page has `cursor: null`. The directory is a complete, stable listing for crawling; ranking and text search over it are services built on it, not relay functions.
 
+## WebFinger
+
+Optional: it lets HTTP clients outside ACE find `@handle@host` with [RFC 7033](https://www.rfc-editor.org/rfc/rfc7033). A relay that does not offer it, or binds no handles, answers `404 not_found`.
+
+`resource` is `acct:<handle>@<host>`, where `host` is the host, with its port if any, of the relay's public URL. When `GET /v1/handles/{handle}` would return a CardBundle, the relay answers with `Content-Type: application/jrd+json` and `Access-Control-Allow-Origin: *`:
+
+```json
+{
+  "subject": "acct:alice@relay.example",
+  "aliases": ["ace:sha256:<hex>"],
+  "links": [
+    {"rel": "https://aceprotocol.org/rel/card", "type": "application/json", "href": "https://relay.example/v1/card/ace:sha256:<hex>"},
+    {"rel": "https://aceprotocol.org/rel/descriptor", "type": "application/json", "href": "https://relay.example/v1/descriptor/ace:sha256:<hex>"}
+  ]
+}
+```
+
+A missing or malformed `resource` is `invalid_argument`; any other resource is `unknown_peer`. `rel` parameters are ignored. The answer is unsigned, the relay's claim only: ACE clients resolve handles with `GET /v1/handles/{handle}` and verify the record as [04](04-descriptor.md#card-record) states.
+
 ## Blocks
 
 `POST /v1/blocks` takes the closed `{peer, blocked, revision}` (`peer` an ACE ID other than the caller, `blocked` a boolean, `revision` a wire integer), authenticated with action `block`. `revision` MUST exceed the stored revision for `(caller, peer)` (`stale_revision`). The relay keeps the revision even after `blocked: false`. It MAY cap tracked peers per identity at no fewer than `MIN_BLOCK_CAP` (`limit_exceeded`).
@@ -166,7 +186,7 @@ Error bodies are `{"error": <code>, "message"?: string}`.
 | `not_registered` | 403 | Caller or publisher not registered here |
 | `not_permitted` | 403 | Missing, invalid or expired permit, unknown or `closed` recipient on send, or blocked sender |
 | `unknown_peer` | 404 | Unknown or expired target, or a handle whose identity has no card record here naming this relay as `home` |
-| `not_found` | 404 | No such route, or wake hints not offered |
+| `not_found` | 404 | No such route, or wake hints or WebFinger not offered |
 | `replay` | 409 | Nonce already used |
 | `identity_conflict` | 409 | Registration or unregister ordering violated |
 | `future_seq` | 409 | `X-ACE-Seq` ahead of the registered KEL |

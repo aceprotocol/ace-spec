@@ -218,6 +218,35 @@ paths:
           "$ref": "#/components/responses/TooManyRequests"
         "500":
           "$ref": "#/components/responses/Error"
+  "/.well-known/webfinger":
+    get:
+      summary: WebFinger for a handle (optional; 404 not_found when not offered)
+      description: "07 § WebFinger. RFC 7033 JRD for acct:<handle>@<host>; unsigned, the relay's claim only. ACE clients use /v1/handles/{handle}."
+      parameters:
+        - name: resource
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^acct:[^@]+@.+$"
+      responses:
+        "200":
+          description: Success
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+                enum: ["*"]
+          content:
+            application/jrd+json:
+              schema:
+                "$ref": "#/components/schemas/WebFingerJrd"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
   "/v1/fallbacks/{digest}":
     get:
       summary: Find a log by a fallback commitment
@@ -691,6 +720,30 @@ components:
       minLength: 3
       maxLength: 32
       pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    WebFingerJrd:
+      type: object
+      required: [subject, aliases, links]
+      properties:
+        subject:
+          type: string
+        aliases:
+          type: array
+          items:
+            "$ref": "#/components/schemas/AceId"
+        links:
+          type: array
+          items:
+            type: object
+            required: [rel, type, href]
+            properties:
+              rel:
+                type: string
+                enum: ["https://aceprotocol.org/rel/card", "https://aceprotocol.org/rel/descriptor"]
+              type:
+                type: string
+                enum: ["application/json"]
+              href:
+                type: string
     RootScheme:
       description: "Signing scheme of a KEL root (and of the KEL event signatures it makes)"
       type: string
